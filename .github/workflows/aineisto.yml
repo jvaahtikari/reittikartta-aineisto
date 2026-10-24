@@ -2,6 +2,9 @@ name: Rakenna Näsijärven aineistopaketti
 
 on:
   workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["*.py", ".github/workflows/aineisto.yml"]
   schedule:
     - cron: "17 3 1 * *"   # kuukauden ensimmäinen päivä klo 03.17 UTC
 
