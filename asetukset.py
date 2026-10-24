@@ -122,10 +122,14 @@ def lue_json(polku, oletus=None):
         return oletus
 
 
-def kirjoita_json(polku, data):
+def kirjoita_json(polku, data, kompakti=False):
+    """kompakti=True kirjoittaa ilman sisennyksiä ja välilyöntejä (selaimen ladattavat hakemistot)."""
     Path(polku).parent.mkdir(parents=True, exist_ok=True)
     with open(polku, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=1)
+        if kompakti:
+            json.dump(data, f, ensure_ascii=False, separators=(",", ":"))
+        else:
+            json.dump(data, f, ensure_ascii=False, indent=1)
 
 
 def tuore(polku):

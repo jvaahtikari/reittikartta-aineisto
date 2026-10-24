@@ -26,12 +26,22 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends gdal-bin python3-gdal python3-numpy python3-pil \
             python3-pyproj python3-shapely python3-pip tippecanoe
-          sudo python3 -m pip install --break-system-packages pmtiles mapbox-vector-tile jsonschema
+          sudo python3 -m pip install --break-system-packages pmtiles mapbox-vector-tile jsonschema laspy lazrs
           tippecanoe --version
           gdalinfo --version
 
+      - name: Laserruutujen välimuisti
+        uses: actions/cache@v4
+        with:
+          path: tyo/laser/raaka/laz
+          key: laser-laz-${{ hashFiles('laser.py') }}
+          restore-keys: laser-laz-
+
       - name: Lataa, rakenna ja tarkista (python3 ajaa.py)
         run: python3 ajaa.py
+
+      - name: Laserkeilaus rantavyöhykkeeltä (python3 laser.py)
+        run: python3 laser.py
 
       - name: Levytila ajon jälkeen
         if: always()
@@ -48,12 +58,15 @@ jobs:
             tyo/tienimet_gdal.log
             ulos/tarkistus.json
             ulos/ajoaika.json
+            ulos/tarkistus_1b.json
+            ulos/tarkistuskuvat/
           retention-days: 30
           if-no-files-found: ignore
 
       - name: Valmistele Pages-paketti
         run: |
-          rm -f ulos/ajoaika.json
+          rm -f ulos/ajoaika.json ulos/tarkistus_1b.json
+          rm -rf ulos/tarkistuskuvat
           ls -la ulos
       - uses: actions/configure-pages@v5
       - uses: actions/upload-pages-artifact@v3

@@ -28,6 +28,8 @@ Onnistuneen ajon jälkeen paketti on osoitteessa `https://KÄYTTÄJÄNIMI.github
 | `nasijarvi.pmtiles` | vektoritiilet, zoom 8–16 (rakennukset, kiinteistörajat, tiet, osoitteet, väylät, turvalaitteet, syvyydet) |
 | `maasto.pmtiles` | korkeustiilet Terrain-RGB-koodauksella, zoom 8–14 |
 | `puusto.pmtiles` | puuston pituus ja latvuspeitto, zoom 10–14 |
+| `osoitteet.json` | osoitehakemisto (kadun nimi, numero, postinumero, kunta ja sijainti), noin 1,7 Mt, Reittikartan osoitehaku lataa sen kerran |
+| `kiinteistot.json` | kiinteistötunnushakemisto (tunnus ja sijainti), noin 1,1 Mt, Reittikartan tunnushaku lataa sen kerran |
 | `aineisto.json` | paketin kuvaus: alue, lähteet, lisenssit ja lähdemerkinnät, kerrokset ja kentät, tiedostokoot ja tarkistussummat |
 | `tarkistus.json` | ajon omat tarkistukset (korkeudet, määrät, koot) |
 | `testi.html` | testisivu, avaa selaimessa osoitteesta `.../testi.html` ja katso että kartta piirtyy |

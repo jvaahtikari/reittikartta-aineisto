@@ -5,12 +5,15 @@ Ajo:  python3 rakenna.py              kaikki osat
       python3 rakenna.py vektori      vain vektoritiilet (nasijarvi.pmtiles)
       python3 rakenna.py maasto       vain maaston korkeustiilet (maasto.pmtiles)
       python3 rakenna.py puusto       vain puuston tiilet (puusto.pmtiles)
+      python3 rakenna.py hakemistot   vain hakuhakemistot (osoitteet.json ja kiinteistot.json)
       python3 rakenna.py kuvaus       vain aineisto.json ja sivuston tiedostot
 
 Tuotokset (hakemisto ulos/):
   nasijarvi.pmtiles   vektoritiilet (MVT), tasot 8-16
   maasto.pmtiles      Terrain-RGB (Mapbox-koodaus) PNG-rasteritiilet, tasot 8-14
   puusto.pmtiles      puuston pituus ja latvuspeitto PNG-rasteritiileinä, tasot 10-14
+  osoitteet.json      osoitehakemisto (katu, numero, postinumero, kunta, sijainti), Reittikartan osoitehakua varten
+  kiinteistot.json    kiinteistötunnushakemisto (tunnus ja sijainti), Reittikartan tunnushakua varten
   aineisto.json       kuvaus: bbox, lähteet, lisenssit, kerrokset, kentät, tiedostot
   testi.html + lib/   testisivu (Leaflet + PMTiles)
 """
@@ -179,11 +182,67 @@ def tee_rantaviiva():
     return kirjoita_rivit(GJ / "rantaviiva.geojsonl", r())
 
 
+def korjaa_koodaus(s):
+    """DVV:n .dbf on UTF-8, mutta ensimmäinen latausversio luki sen cp1252-koodauksena, jolloin ä ja ö muuttuivat
+    muotoon Ã¤ ja Ã¶. Korjaa jo hajonneen merkkijonon takaisin ja jättää oikein koodatun merkkijonon ennalleen."""
+    if not s:
+        return s
+    try:
+        return s.encode("cp1252").decode("utf-8")
+    except (UnicodeEncodeError, UnicodeDecodeError):
+        return s
+
+
 def tee_osoite():
     def r():
         for g, p in gpkg_rivit("osoite"):
-            yield piirre(g, {"osoite": p["osoite"], "postinumero": p["postinumero"], "tyyppi": p["tyyppi"]})
+            yield piirre(g, {"osoite": korjaa_koodaus(p["osoite"]), "postinumero": p["postinumero"], "tyyppi": p["tyyppi"]})
     return kirjoita_rivit(GJ / "osoite.geojsonl", r())
+
+
+def tee_hakemistot():
+    """Hakuhakemistot Reittikartan osoite- ja kiinteistötunnushakua varten. PMTiles-tiedostoa ei voi hakea tekstillä,
+    joten haettavat tiedot kirjoitetaan pieniksi JSON-tiedostoiksi, jotka selain lataa kerran ensimmäisellä haulla.
+    osoitteet.json: kadun nimi -> rivit [numero, postinumero, kuntakoodi, lat, lon]
+    kiinteistot.json: kiinteistötunnus (kunta-kylä-tila-rno, ilman etunollia) -> [lat, lon, lat, lon, ...]"""
+    paiva = time.strftime("%Y-%m-%d")
+    kadut = {}
+    nahty = set()
+    rivit = 0
+    for g, p in gpkg_rivit("osoite"):
+        katu = korjaa_koodaus(p["katu"])
+        numero = korjaa_koodaus(p["numero"])
+        if not katu or not numero:
+            continue
+        rivi = [numero, p["postinumero"] or "", p["kunta"] or "", round(g.y, 5), round(g.x, 5)]
+        avain = (katu, tuple(rivi))
+        if avain in nahty:
+            continue
+        nahty.add(avain)
+        kadut.setdefault(katu, []).append(rivi)
+        rivit += 1
+    for rs in kadut.values():
+        rs.sort(key=lambda r: (int(re.match(r"\d+", r[0]).group()) if re.match(r"\d+", r[0]) else 0, r[0]))
+    osoitteet = {"versio": 1, "paiva": paiva,
+                 "kuvaus": "Osoitehakemisto: kadun nimi -> rivit [numero, postinumero, kuntakoodi, lat, lon]. "
+                           "Lähde: DVV, poiminta 3.2.2025 (CC BY 4.0).",
+                 "rivia": rivit, "katuja": len(kadut), "kadut": dict(sorted(kadut.items()))}
+    kirjoita_json(ULOS / "osoitteet.json", osoitteet, kompakti=True)
+    loki("osoitteet.json: %d osoitetta, %d katua, %.2f Mt" % (rivit, len(kadut), (ULOS / "osoitteet.json").stat().st_size / 1e6))
+
+    tunnukset = {}
+    for g, p in gpkg_rivit("kiinteistotunnus"):
+        t = p["tunnus"]
+        if not t or not re.match(r"^\d{1,3}-\d{1,3}-\d+-\d+$", t):
+            continue
+        tunnukset.setdefault(t, []).extend([round(g.y, 5), round(g.x, 5)])
+    kiinteistot = {"versio": 1, "paiva": paiva,
+                   "kuvaus": "Kiinteistötunnushakemisto: tunnus kunta-kylä-tila-rno (ilman etunollia) -> [lat, lon, ...], "
+                             "useampi piste, jos tunnuksella on useita palstoja. Lähde: Maanmittauslaitos (CC BY 4.0).",
+                   "tunnuksia": len(tunnukset), "tunnukset": dict(sorted(tunnukset.items()))}
+    kirjoita_json(ULOS / "kiinteistot.json", kiinteistot, kompakti=True)
+    loki("kiinteistot.json: %d tunnusta, %.2f Mt" % (len(tunnukset), (ULOS / "kiinteistot.json").stat().st_size / 1e6))
+    return {"osoitteet": rivit, "katuja": len(kadut), "kiinteistotunnuksia": len(tunnukset)}
 
 
 def tee_vesieste():
@@ -685,7 +744,7 @@ LAHTEET = [
      "huomio": "Rakennusten kerrosluku on MML:n luokittelu (1-2 kerrosta, 3 tai enemmän). Tarkkaa kerroslukua ei ole."},
     {"id": "mml_kiinteisto", "nimi": "Kiinteistörajat ja palstatunnukset 2025",
      "tuottaja": "Maanmittauslaitos", "ehtotiedosto": "MML",
-     "osoite": PAITULI + "mml/kiinteisto/2025/", "kerrokset": ["kiinteistoraja", "kiinteistotunnus"],
+     "osoite": PAITULI + "mml/kiinteisto/2025/", "kerrokset": ["kiinteistoraja", "kiinteistotunnus", "kiinteistot.json"],
      "lisenssi": "CC BY 4.0", "lisenssi_url": "https://creativecommons.org/licenses/by/4.0/",
      "lahdemerkinta": "Sisältää Maanmittauslaitoksen kiinteistörajatietoja 05/2025 (CC BY 4.0).",
      "huomio": "Omistajatietoja ei ole eikä niitä haeta."},
@@ -697,7 +756,7 @@ LAHTEET = [
      "huomio": "Korkeusjärjestelmä N2000. Lähteen nodata -9999."},
     {"id": "dvv_osoitteet", "nimi": "Rakennusten osoitetiedot (DVV, poiminta 3.2.2025)",
      "tuottaja": "Digi- ja väestötietovirasto", "ehtotiedosto": "DVV",
-     "osoite": PAITULI + "dvv/osoitteet/2025/osoiteet_2025.shp", "kerrokset": ["osoite"],
+     "osoite": PAITULI + "dvv/osoitteet/2025/osoiteet_2025.shp", "kerrokset": ["osoite", "osoitteet.json"],
      "lisenssi": "CC BY 4.0", "lisenssi_url": "https://creativecommons.org/licenses/by/4.0/",
      "lahdemerkinta": "Sisältää Digi- ja väestötietoviraston rakennusten osoitetietoja (poiminta 3.2.2025, CC BY 4.0).",
      "huomio": "DVV lopetti aineiston avoimen jakelun 14.3.2025. Tämä on viimeinen avoin versio eikä se päivity."},
@@ -769,10 +828,17 @@ def rakenna_kuvaus():
         d["siirretty_tavua"] = lo.get("tavua") or lo.get("siirretty_tavua")
         lahteet.append(d)
     tiedostot = []
-    for nimi in ("nasijarvi.pmtiles", "maasto.pmtiles", "puusto.pmtiles"):
+    for nimi in ("nasijarvi.pmtiles", "maasto.pmtiles", "puusto.pmtiles", "osoitteet.json", "kiinteistot.json"):
         p = ULOS / nimi
         if p.exists():
             tiedostot.append({"nimi": nimi, "tavua": p.stat().st_size, "sha256": tiedoston_sha(p)})
+    hakemistot = {}
+    for avain, nimi, kentta in (("osoitteet", "osoitteet.json", "kadut"), ("kiinteistot", "kiinteistot.json", "tunnukset")):
+        p = ULOS / nimi
+        if p.exists():
+            d = json.loads(p.read_text(encoding="utf-8"))
+            hakemistot[avain] = {k: v for k, v in d.items() if k != kentta}
+            hakemistot[avain]["tiedosto"] = nimi
     kerrokset = {}
     for nimi, k in KERROKSET.items():
         kerrokset[nimi] = {"tyyppi": k["tyyppi"], "minzoom": k["minzoom"], "maxzoom": VEKTORI_MAXZ, "kuvaus": k["kuvaus"],
@@ -793,6 +859,9 @@ def rakenna_kuvaus():
         "koordinaatistot": {"kasittely": "EPSG:3067", "julkaisu": "EPSG:3857 (tiilet), EPSG:4326 (vektorikohteet)",
                             "korkeusjarjestelma": "N2000 (EPSG:3900)"},
         "tiedostot": tiedostot,
+        "hakemistot": dict(hakemistot, muoto="Selaimen kerran lataamat JSON-hakemistot (PMTiles-tiedostoa ei voi hakea tekstillä). "
+                                              "osoitteet.json: {kadut: {katu: [[numero, postinumero, kuntakoodi, lat, lon], ...]}}. "
+                                              "kiinteistot.json: {tunnukset: {tunnus: [lat, lon, ...]}}, tunnus muodossa kunta-kylä-tila-rno ilman etunollia."),
         "tiilet": {
             "vektori": {"tiedosto": "nasijarvi.pmtiles", "muoto": "mvt", "minzoom": VEKTORI_MINZ, "maxzoom": VEKTORI_MAXZ,
                         "ruudun_koko": 512, "kerrokset": kerrokset},
@@ -873,7 +942,7 @@ def kopioi_sivusto():
         shutil.copytree(lib, ULOS / "lib", dirs_exist_ok=True)
 
 
-OSAT = {"vektori": rakenna_vektori, "maasto": rakenna_maasto, "puusto": rakenna_puusto,
+OSAT = {"vektori": rakenna_vektori, "maasto": rakenna_maasto, "puusto": rakenna_puusto, "hakemistot": tee_hakemistot,
         "kuvaus": lambda: (kopioi_sivusto(), rakenna_kuvaus())}
 
 

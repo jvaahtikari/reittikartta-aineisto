@@ -12,6 +12,8 @@ Tarkistukset vastaavat määrittelyn hyväksymiskriteerejä 1-6 niiltä osin kui
  4  osoitteiden määrä ja kolme testiosoitetta
  5  paketin koko ja yhden puhelinnäkymän tiilimäärä
  6  aineisto.json:n rakenne, tiedostokoot ja tarkistussummat
+ 7  hakuhakemistot osoitteet.json ja kiinteistot.json: testiosoitteet alle 50 m vaiheen 1 tuloksista, ei hajonnutta
+    merkistöä, kiinteistötunnukset täsmäävät vektoritiilien tunnuspisteisiin
 """
 import gzip
 import hashlib
@@ -292,6 +294,54 @@ def tarkista_rakennukset_osoitteet(vek):
     kirjaa("4_osoitteet", ok, osoitepisteita=lkm, testiosoitteet=tulokset)
 
 
+def tarkista_hakemistot(vek):
+    """Kriteeri 7: hakuhakemistot osoitteet.json ja kiinteistot.json."""
+    vir = []
+    po, pk = ULOS / "osoitteet.json", ULOS / "kiinteistot.json"
+    if not po.exists() or not pk.exists():
+        kirjaa("7_hakemistot", False, virheita=["osoitteet.json tai kiinteistot.json puuttuu"])
+        return
+    os_ = json.load(open(po, encoding="utf-8"))
+    ki = json.load(open(pk, encoding="utf-8"))
+    kadut, tunnukset = os_["kadut"], ki["tunnukset"]
+    hajonneet = [k for k in kadut if "Ã" in k or "Â" in k or "\ufffd" in k]
+    if hajonneet:
+        vir.append("hajonnutta merkistöä kadun nimessä: %s" % hajonneet[:5])
+    # testiosoitteet: sama kolmikko ja sijainnit kuin kohdassa 4
+    testit = [("Laiturikatu", "8", 23.746282, 61.5053), ("Rantatie", "3", 23.723903, 61.502643), ("Siilinkari", "2", 23.753915, 61.517575)]
+    osumat = []
+    for katu, nro, lon0, lat0 in testit:
+        ehdokkaat = [r for r in kadut.get(katu, []) if r[0] == nro]
+        parhaat = min((haversine(lon0, lat0, r[4], r[3]) for r in ehdokkaat), default=None)
+        osumat.append({"osoite": "%s %s" % (katu, nro), "rivejä": len(ehdokkaat), "etaisyys_m": None if parhaat is None else round(parhaat, 1)})
+        if parhaat is None or parhaat > 50:
+            vir.append("testiosoite %s %s ei löydy alle 50 m päästä (%s)" % (katu, nro, parhaat))
+    # kiinteistötunnukset: kolme tunnusta (Tampereen keskusta, Teisko, Murole) täsmää vektoritiilien tunnuspisteeseen
+    ehdot = [("Tampereen keskusta", 23.7610, 61.4978), ("Teisko", 23.8330, 61.6280), ("Murole", 23.7100, 61.9300)]
+    z = 16
+    tunnusosumat = []
+    for nimi, lon0, lat0 in ehdot:
+        x, y = tiili_xy(lon0, lat0, z)
+        parhaat = None
+        for dx in (-2, -1, 0, 1, 2):
+            for dy in (-2, -1, 0, 1, 2):
+                for lon, lat, p in mvt_piirteet(vek.mvt(z, x + dx, y + dy), "kiinteistotunnus", z, x + dx, y + dy):
+                    d = haversine(lon0, lat0, lon, lat)
+                    if p.get("tunnus") in tunnukset and (parhaat is None or d < parhaat[0]):
+                        parhaat = (d, p["tunnus"], lon, lat)
+        if not parhaat:
+            vir.append("%s: tunnusta ei löytynyt vektoritiilistä ja hakemistosta" % nimi)
+            continue
+        pisteet = tunnukset[parhaat[1]]
+        ero = min(haversine(parhaat[2], parhaat[3], pisteet[i + 1], pisteet[i]) for i in range(0, len(pisteet), 2))
+        tunnusosumat.append({"alue": nimi, "tunnus": parhaat[1], "ero_vektoritiileen_m": round(ero, 1)})
+        if ero > 3:
+            vir.append("%s: hakemiston piste poikkeaa tiilen pisteestä %.1f m" % (nimi, ero))
+    kirjaa("7_hakemistot", not vir, virheita=vir, osoitteita=os_["rivia"], katuja=os_["katuja"], tunnuksia=ki["tunnuksia"],
+           testiosoitteet=osumat, testitunnukset=tunnusosumat,
+           koot_mt={"osoitteet": round(po.stat().st_size / 1e6, 2), "kiinteistot": round(pk.stat().st_size / 1e6, 2)})
+
+
 def tarkista_korkeudet(mas):
     from osgeo import gdal, ogr, osr
     import numpy as np
@@ -390,6 +440,7 @@ def main(argv):
     mas = Tiilet(ULOS / "maasto.pmtiles")
     pus = Tiilet(ULOS / "puusto.pmtiles")
     tarkista_rakennukset_osoitteet(vek)
+    tarkista_hakemistot(vek)
     tarkista_valot(vek)
     tarkista_puhelinnakyma(vek, mas, pus)
     if not kevyt and (TYO / "dem10.tif").exists():

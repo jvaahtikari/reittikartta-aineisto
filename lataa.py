@@ -674,7 +674,12 @@ def vaihe_dvv():
 
     def teksti(rec, nimi):
         p, l = kentta[nimi]
-        return rec[p:p + l].decode("cp1252", errors="replace").strip() or None
+        # DVV:n .dbf on UTF-8 (cp1252-luku tuotti ä:n tilalle Ã¤). Varalla cp1252, jos tavut eivät ole kelvollista UTF-8:aa.
+        tavut_ = rec[p:p + l]
+        try:
+            return tavut_.decode("utf-8").strip() or None
+        except UnicodeDecodeError:
+            return tavut_.decode("cp1252", errors="replace").strip() or None
 
     def rivit():
         for i in idx:
