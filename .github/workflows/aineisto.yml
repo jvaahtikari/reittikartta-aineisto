@@ -1,0 +1,71 @@
+name: Rakenna Näsijärven aineistopaketti
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 3 1 * *"   # kuukauden ensimmäinen päivä klo 03.17 UTC
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: aineisto
+  cancel-in-progress: false
+
+jobs:
+  rakenna:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Asenna työkalut
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gdal-bin python3-gdal python3-numpy python3-pil \
+            python3-pyproj python3-shapely python3-pip tippecanoe
+          sudo python3 -m pip install --break-system-packages pmtiles mapbox-vector-tile jsonschema
+          tippecanoe --version
+          gdalinfo --version
+
+      - name: Lataa, rakenna ja tarkista (python3 ajaa.py)
+        run: python3 ajaa.py
+
+      - name: Levytila ajon jälkeen
+        if: always()
+        run: df -h . && du -sh tyo ulos || true
+
+      - name: Tallenna lokit ja tarkistustulos
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lokit
+          path: |
+            tyo/lataus_loki.json
+            tyo/kerrosmaarat.json
+            tyo/tienimet_gdal.log
+            ulos/tarkistus.json
+            ulos/ajoaika.json
+          retention-days: 30
+          if-no-files-found: ignore
+
+      - name: Valmistele Pages-paketti
+        run: |
+          rm -f ulos/ajoaika.json
+          ls -la ulos
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: ulos
+
+  julkaise:
+    needs: rakenna
+    runs-on: ubuntu-24.04
+    environment:
+      name: github-pages
+      url: ${{ steps.julkaisu.outputs.page_url }}
+    steps:
+      - id: julkaisu
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,286 @@
+<!doctype html>
+<html lang="fi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Näsijärven aineisto, testisivu</title>
+<link rel="stylesheet" href="lib/leaflet.css">
+<style>
+  html, body { height: 100%; margin: 0; font-family: system-ui, sans-serif; }
+  #kartta { position: absolute; inset: 0; background: #dfeaf3; }
+  .paneeli { position: absolute; z-index: 1000; right: 8px; top: 8px; background: rgba(255,255,255,.92); padding: 6px 8px;
+             border-radius: 6px; font-size: 12px; line-height: 1.5; box-shadow: 0 1px 4px rgba(0,0,0,.3); max-width: 230px; }
+  .paneeli label { display: block; white-space: nowrap; }
+  .lahde { position: absolute; z-index: 1000; left: 0; right: 0; bottom: 0; background: rgba(255,255,255,.88);
+           font-size: 10px; padding: 2px 6px; color: #222; }
+  .eikaytto { position: absolute; z-index: 1000; left: 8px; top: 8px; background: #fff3cd; border: 1px solid #c9a227;
+              padding: 3px 7px; font-size: 11px; border-radius: 4px; }
+  body.kuva .paneeli { display: none; }
+</style>
+</head>
+<body>
+<div id="kartta"></div>
+<div class="eikaytto">Ei navigointikäyttöön</div>
+<div class="paneeli" id="paneeli">
+  <b>Tasot</b>
+  <label><input type="checkbox" data-taso="maasto" checked> Maasto (varjostus)</label>
+  <label><input type="checkbox" data-taso="puusto"> Puusto</label>
+  <label><input type="checkbox" data-taso="vektori" checked> Vektoritiilet</label>
+  <label><input type="checkbox" data-taso="kiinteisto" checked> Kiinteistörajat</label>
+  <label><input type="checkbox" data-taso="valot" checked> Valosektorit</label>
+</div>
+<div class="lahde" id="lahde">Ladataan aineistokuvausta…</div>
+<script src="lib/leaflet.js"></script>
+<script src="lib/pmtiles.js"></script>
+<script src="lib/protomaps-leaflet.js"></script>
+<script>
+(function () {
+  'use strict';
+  var q = new URLSearchParams(location.search);
+  var lat = parseFloat(q.get('lat') || '61.5045'), lon = parseFloat(q.get('lon') || '23.7545'), zoom = parseInt(q.get('z') || '15', 10);
+  if (q.get('kuva')) document.body.classList.add('kuva');
+  var pois = (q.get('pois') || '').split(',');          // esim. pois=kiinteisto,valot
+  var paalle = (q.get('paalle') || '').split(',');      // esim. paalle=puusto
+  var kartta = L.map('kartta', { center: [lat, lon], zoom: zoom, minZoom: 8, maxZoom: 19, zoomControl: !q.get('kuva'), attributionControl: false });
+  var tila = { vektoriValmis: false, maastoValmis: false, kuormia: 0, virheet: [] };
+  window.__testi = tila;
+
+  // --- Maaston varjostus: Terrain-RGB-tiilistä -------------------------------------------------
+  var maastoPmt = new pmtiles.PMTiles('maasto.pmtiles');
+  var puustoPmt = new pmtiles.PMTiles('puusto.pmtiles');
+  var vari = [[90, 232, 240, 224], [110, 224, 235, 205], [130, 232, 226, 190], [150, 224, 210, 175], [180, 205, 190, 160], [230, 190, 175, 150]];
+  function sävy(h) {
+    if (h <= vari[0][0]) return vari[0].slice(1);
+    for (var i = 1; i < vari.length; i++) {
+      if (h <= vari[i][0]) {
+        var a = vari[i - 1], b = vari[i], t = (h - a[0]) / (b[0] - a[0]);
+        return [a[1] + (b[1] - a[1]) * t, a[2] + (b[2] - a[2]) * t, a[3] + (b[3] - a[3]) * t];
+      }
+    }
+    return vari[vari.length - 1].slice(1);
+  }
+  function lataaKuva(data) {
+    return createImageBitmap(new Blob([data], { type: 'image/png' }), { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+  }
+  function pikselit(bm) {
+    var c = document.createElement('canvas'); c.width = bm.width; c.height = bm.height;
+    var g = c.getContext('2d', { willReadFrequently: true });
+    g.drawImage(bm, 0, 0);
+    return g.getImageData(0, 0, bm.width, bm.height);
+  }
+  function varjostus(id, z, y) {
+    var n = id.width, d = id.data, h = new Float32Array(n * n);
+    for (var i = 0; i < n * n; i++) {
+      var r = d[i * 4], g = d[i * 4 + 1], b = d[i * 4 + 2];
+      h[i] = (r === 0 && g === 0 && b === 0) ? NaN : -10000 + (r * 65536 + g * 256 + b) * 0.1;
+    }
+    var merc = 156543.03392804097 / Math.pow(2, z) * 256 / n;
+    var latT = Math.atan(Math.sinh(Math.PI * (1 - 2 * (y + 0.5) / Math.pow(2, z)))) ;
+    var res = merc * Math.cos(latT);
+    var ulos = new ImageData(n, n), o = ulos.data;
+    var lx = -0.5, ly = -0.5, lz = 0.7071, ll = Math.sqrt(lx * lx + ly * ly + lz * lz); lx /= ll; ly /= ll; lz /= ll;
+    var kork = 2.0;
+    for (var yy = 0; yy < n; yy++) {
+      for (var xx = 0; xx < n; xx++) {
+        var k = yy * n + xx, e = h[k];
+        if (isNaN(e)) { o[k * 4 + 3] = 0; continue; }
+        var xl = h[yy * n + Math.max(xx - 1, 0)], xr = h[yy * n + Math.min(xx + 1, n - 1)];
+        var yu = h[Math.max(yy - 1, 0) * n + xx], yd = h[Math.min(yy + 1, n - 1) * n + xx];
+        if (isNaN(xl)) xl = e; if (isNaN(xr)) xr = e; if (isNaN(yu)) yu = e; if (isNaN(yd)) yd = e;
+        var dzdx = (xr - xl) / (2 * res) * kork, dzdy = (yd - yu) / (2 * res) * kork;
+        var nl = Math.sqrt(dzdx * dzdx + dzdy * dzdy + 1);
+        var nx = -dzdx / nl, ny = -dzdy / nl, nz = 1 / nl;
+        var ill = Math.max(0, nx * lx + ny * (-ly) + nz * lz);   // valo luoteesta
+        var f = 0.45 + 0.75 * ill;
+        var s = sävy(e);
+        o[k * 4] = Math.min(255, s[0] * f); o[k * 4 + 1] = Math.min(255, s[1] * f); o[k * 4 + 2] = Math.min(255, s[2] * f); o[k * 4 + 3] = 255;
+      }
+    }
+    return ulos;
+  }
+  var tiiliVarasto = {};
+  function haeKuvadata(pmt, nimi, z, x, y) {
+    var avain = nimi + '/' + z + '/' + x + '/' + y;
+    if (!tiiliVarasto[avain]) {
+      tiiliVarasto[avain] = pmt.getZxy(z, x, y).then(function (r) { return r ? lataaKuva(r.data).then(pikselit) : null; });
+    }
+    return tiiliVarasto[avain];
+  }
+  var MaastoKerros = L.GridLayer.extend({
+    options: { tileSize: 256, maxNativeZoom: 14, minNativeZoom: 8, pane: 'tilePane' },
+    createTile: function (c, done) {
+      var el = document.createElement('canvas'); el.width = 256; el.height = 256;
+      var nz = Math.min(c.z, 14), dz = c.z - nz, nx = c.x >> dz, ny = c.y >> dz;
+      tila.kuormia++;
+      haeKuvadata(maastoPmt, 'm', nz, nx, ny).then(function (id) {
+        if (id) {
+          var vs = varjostus(id, nz, ny);
+          var tmp = document.createElement('canvas'); tmp.width = vs.width; tmp.height = vs.height;
+          tmp.getContext('2d').putImageData(vs, 0, 0);
+          var g = el.getContext('2d'); g.imageSmoothingEnabled = true; g.imageSmoothingQuality = 'high';
+          var osa = vs.width >> dz, sx = (c.x - (nx << dz)) * osa, sy = (c.y - (ny << dz)) * osa;
+          g.drawImage(tmp, sx, sy, osa, osa, 0, 0, 256, 256);
+        }
+        tila.kuormia--; done(null, el);
+      }).catch(function (e) { tila.virheet.push('maasto ' + e); tila.kuormia--; done(null, el); });
+      return el;
+    }
+  });
+  var PuustoKerros = L.GridLayer.extend({
+    options: { tileSize: 256, maxNativeZoom: 14, minNativeZoom: 10 },
+    createTile: function (c, done) {
+      var el = document.createElement('canvas'); el.width = 256; el.height = 256;
+      if (c.z < 10) { done(null, el); return el; }
+      var nz = Math.min(c.z, 14), dz = c.z - nz, nx = c.x >> dz, ny = c.y >> dz;
+      tila.kuormia++;
+      haeKuvadata(puustoPmt, 'p', nz, nx, ny).then(function (id) {
+        if (id) {
+          var out = new ImageData(id.width, id.height), d = id.data, o = out.data;
+          for (var i = 0; i < id.width * id.height; i++) {
+            if (d[i * 4 + 3] === 0) continue;
+            var dm = d[i * 4] * 256 + d[i * 4 + 1], m = dm / 10, lp = d[i * 4 + 2];
+            var t = Math.min(1, m / 25);
+            o[i * 4] = 30 + 20 * (1 - t); o[i * 4 + 1] = 100 + 40 * (1 - t); o[i * 4 + 2] = 45; o[i * 4 + 3] = 40 + 150 * t * Math.min(1, 0.4 + lp / 100);
+          }
+          var tmp = document.createElement('canvas'); tmp.width = out.width; tmp.height = out.height;
+          tmp.getContext('2d').putImageData(out, 0, 0);
+          var g = el.getContext('2d'); g.imageSmoothingEnabled = false;
+          var osa = out.width >> dz, sx = (c.x - (nx << dz)) * osa, sy = (c.y - (ny << dz)) * osa;
+          g.drawImage(tmp, sx, sy, osa, osa, 0, 0, 256, 256);
+        }
+        tila.kuormia--; done(null, el);
+      }).catch(function (e) { tila.virheet.push('puusto ' + e); tila.kuormia--; done(null, el); });
+      return el;
+    }
+  });
+  var maasto = new MaastoKerros(), puusto = new PuustoKerros({ opacity: 0.85 });
+  maasto.on('load', function () { tila.maastoValmis = true; });
+
+  // --- Vektoritiilet ---------------------------------------------------------------------------
+  var P = protomapsL;
+  function on(taso) { return pois.indexOf(taso) < 0; }
+  var syvyysVari = function (z, f) {
+    var a = f.props.alin;
+    return a >= 20 ? '#5b93c4' : a >= 10 ? '#77aad3' : a >= 6 ? '#93bde0' : a >= 3 ? '#add0ea' : '#c6dff0';
+  };
+  var luokka = function (nimi) { return function (z, f) { return f.props.luokka === nimi; }; };
+  var tieLuokat = function (lista) { return function (z, f) { return lista.indexOf(f.props.luokka) >= 0; }; };
+  var isoTie = [12111, 12112, 12121, 12122], keskiTie = [12131, 12132], pikkuTie = [12141], polku = [12311, 12312, 12313, 12314, 12316], rata = [14111, 14112, 14121, 14131];
+  var VALOVARI = { p: '#e0242b', vi: '#1f9d3a', v: '#ffffff', k: '#f7d117' };   // v valkoinen, p punainen, vi vihreä, k keltainen
+  var sektoriPiirto = {
+    draw: function (ctx, geom, z, f) {
+      if (!on('valot') || z < 11) return;
+      var pt = geom[0][0], sek = [];
+      try { sek = JSON.parse(f.props.sektorit || '[]'); } catch (e) { sek = []; }
+      var R = z >= 15 ? 46 : z >= 13 ? 34 : 24;
+      sek.forEach(function (s) {
+        var a0 = (s.alku - 90) * Math.PI / 180, a1 = (s.loppu - 90) * Math.PI / 180;
+        if (s.loppu <= s.alku) a1 += 2 * Math.PI;
+        ctx.beginPath(); ctx.moveTo(pt.x, pt.y);
+        ctx.arc(pt.x, pt.y, R, a0, a1);
+        ctx.closePath();
+        ctx.globalAlpha = 0.28; ctx.fillStyle = VALOVARI[s.vari] || '#999'; ctx.fill();
+        ctx.globalAlpha = 0.9; ctx.lineWidth = 1.2; ctx.strokeStyle = (s.vari === 'v') ? '#777' : (VALOVARI[s.vari] || '#999');
+        ctx.beginPath(); ctx.arc(pt.x, pt.y, R, a0, a1); ctx.stroke();
+        ctx.globalAlpha = 1;
+      });
+    }
+  };
+  var turvalaiteSymboli = {
+    draw: function (ctx, geom, z, f) {
+      if (z < 11) return;
+      var pt = geom[0][0], valaistu = f.props.valaistu === 'K';
+      ctx.beginPath(); ctx.arc(pt.x, pt.y, z >= 14 ? 4.2 : 3, 0, 2 * Math.PI);
+      ctx.fillStyle = valaistu ? '#ffd23f' : '#ffffff'; ctx.fill();
+      ctx.lineWidth = 1.2; ctx.strokeStyle = valaistu ? '#b0000b' : '#444'; ctx.stroke();
+      if (valaistu && z >= 13 && f.props.valotunnus) {
+        ctx.font = '600 10px sans-serif'; ctx.fillStyle = '#6a0010'; ctx.strokeStyle = 'rgba(255,255,255,.9)'; ctx.lineWidth = 3;
+        var t = f.props.valotunnus;
+        ctx.strokeText(t, pt.x + 7, pt.y + 14); ctx.fillText(t, pt.x + 7, pt.y + 14);
+      }
+    }
+  };
+  var paint = [
+    { dataLayer: 'maastokuvio', filter: luokka('jarvi'), symbolizer: new P.PolygonSymbolizer({ fill: '#d3e6f3' }) },
+    { dataLayer: 'maastokuvio', filter: luokka('virtavesi'), symbolizer: new P.PolygonSymbolizer({ fill: '#c3dcee' }) },
+    { dataLayer: 'maastokuvio', filter: luokka('pelto'), symbolizer: new P.PolygonSymbolizer({ fill: '#fff2a8', opacity: 0.55 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('niitty'), symbolizer: new P.PolygonSymbolizer({ fill: '#d6eaa0', opacity: 0.5 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('suo'), symbolizer: new P.PolygonSymbolizer({ fill: '#9fc8b8', opacity: 0.55 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('soistuma'), symbolizer: new P.PolygonSymbolizer({ fill: '#b9d6c6', opacity: 0.45 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('kallio'), symbolizer: new P.PolygonSymbolizer({ fill: '#b7b0a6', opacity: 0.55 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('kivikko'), symbolizer: new P.PolygonSymbolizer({ fill: '#a39d94', opacity: 0.5 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('hietikko'), symbolizer: new P.PolygonSymbolizer({ fill: '#f2dfa3', opacity: 0.7 }) },
+    { dataLayer: 'maastokuvio', filter: function (z, f) { return ['puisto', 'urheilu_virkistys', 'hautausmaa'].indexOf(f.props.luokka) >= 0; }, symbolizer: new P.PolygonSymbolizer({ fill: '#b5deA0', opacity: 0.65 }) },
+    { dataLayer: 'maastokuvio', filter: function (z, f) { return ['autoliikenne', 'varastoalue', 'louhos', 'maa_aines', 'kaatopaikka', 'taytemaa', 'lentokentta'].indexOf(f.props.luokka) >= 0; }, symbolizer: new P.PolygonSymbolizer({ fill: '#c9c4bd', opacity: 0.6 }) },
+    { dataLayer: 'maastokuvio', filter: luokka('taajama'), symbolizer: new P.PolygonSymbolizer({ fill: '#f0c9a8', opacity: 0.18 }) },
+    { dataLayer: 'syvyysalue', symbolizer: new P.PolygonSymbolizer({ fill: syvyysVari, opacity: 0.9 }) },
+    { dataLayer: 'syvyyskayra', minzoom: 12, symbolizer: new P.LineSymbolizer({ color: '#2f6c9f', width: 0.6, opacity: 0.7 }) },
+    { dataLayer: 'rantaviiva', symbolizer: new P.LineSymbolizer({ color: '#3a78a8', width: 1 }) },
+    { dataLayer: 'vaylaalue', symbolizer: new P.PolygonSymbolizer({ fill: '#1b7a3d', opacity: 0.10, stroke: '#1b7a3d', width: 0.8 }) },
+    { dataLayer: 'nopeusrajoitus', symbolizer: new P.PolygonSymbolizer({ fill: '#e24b4b', opacity: 0.08, stroke: '#c0392b', width: 0.8 }) },
+    { dataLayer: 'vesieste', filter: function (z, f) { return f.geomType === 3; }, symbolizer: new P.PolygonSymbolizer({ fill: '#8a6d3b', opacity: 0.35, stroke: '#6b4f1d', width: 0.8 }) },
+    { dataLayer: 'vesieste', filter: function (z, f) { return f.geomType === 2; }, symbolizer: new P.LineSymbolizer({ color: '#5a4630', width: 1.4 }) },
+    { dataLayer: 'vesieste', filter: function (z, f) { return f.geomType === 1; }, symbolizer: new P.CircleSymbolizer({ radius: 2.2, fill: function (z, f) { return f.props.laji === 'vesikivi_vedenalainen' ? '#d9534f' : '#5a4630'; }, stroke: '#fff', width: 0.6 }) },
+    { dataLayer: 'kiinteistoraja', id: 'kiinteisto', minzoom: 14, symbolizer: new P.LineSymbolizer({ color: '#a0489e', width: 0.7, opacity: 0.75, dash: [4, 3] }) },
+    { dataLayer: 'tie', filter: tieLuokat(isoTie), symbolizer: new P.LineSymbolizer({ color: '#b5651d', width: function (z) { return z < 12 ? 2.2 : 4.5; } }) },
+    { dataLayer: 'tie', filter: tieLuokat(isoTie), symbolizer: new P.LineSymbolizer({ color: '#ffbd5a', width: function (z) { return z < 12 ? 1.2 : 3; } }) },
+    { dataLayer: 'tie', filter: tieLuokat(keskiTie), symbolizer: new P.LineSymbolizer({ color: '#a59a8a', width: function (z) { return z < 13 ? 2 : 4; } }) },
+    { dataLayer: 'tie', filter: tieLuokat(keskiTie), symbolizer: new P.LineSymbolizer({ color: '#fff3c4', width: function (z) { return z < 13 ? 1 : 2.6; } }) },
+    { dataLayer: 'tie', filter: tieLuokat(pikkuTie), symbolizer: new P.LineSymbolizer({ color: '#b9b2a6', width: function (z) { return z < 14 ? 1.8 : 3.2; } }) },
+    { dataLayer: 'tie', filter: tieLuokat(pikkuTie), symbolizer: new P.LineSymbolizer({ color: '#ffffff', width: function (z) { return z < 14 ? 0.9 : 2; } }) },
+    { dataLayer: 'tie', filter: tieLuokat(polku), symbolizer: new P.LineSymbolizer({ color: '#7a5a3a', width: 1, dash: [3, 2] }) },
+    { dataLayer: 'tie', filter: tieLuokat(rata), symbolizer: new P.LineSymbolizer({ color: '#555', width: 1.6, dash: [6, 4] }) },
+    { dataLayer: 'rakennus', symbolizer: new P.PolygonSymbolizer({ fill: function (z, f) { return f.props.krs === '3+' ? '#8c8279' : '#a9a29b'; }, stroke: '#6b645d', width: 0.5 }) },
+    { dataLayer: 'navigointilinja', symbolizer: new P.LineSymbolizer({ color: '#12803c', width: 1, dash: [6, 3] }) },
+    { dataLayer: 'taululinja', symbolizer: new P.LineSymbolizer({ color: '#12803c', width: 0.8, dash: [2, 3] }) },
+    { dataLayer: 'turvalaite', symbolizer: sektoriPiirto },
+    { dataLayer: 'turvalaite', symbolizer: turvalaiteSymboli },
+    { dataLayer: 'vesiliikennemerkki', minzoom: 14, symbolizer: new P.CircleSymbolizer({ radius: 2.4, fill: '#ffffff', stroke: '#c0392b', width: 1.2 }) },
+    { dataLayer: 'osoite', minzoom: 16, symbolizer: new P.CircleSymbolizer({ radius: 2, fill: '#0b6fa4', stroke: '#fff', width: 0.6 }) },
+    { dataLayer: 'syvyyspiste', minzoom: 13, symbolizer: new P.CircleSymbolizer({ radius: 1, fill: '#2f6c9f' }) }
+  ];
+  paint = paint.filter(function (r) { return !(r.id === 'kiinteisto' && !on('kiinteisto')); });
+  var teksti = function (props, extra) {
+    var o = { labelProps: props, fill: '#222', stroke: '#fff', width: 3, fontSize: 11, fontFamily: 'sans-serif' };
+    for (var k in extra) o[k] = extra[k]; return new P.TextSymbolizer(o);
+  };
+  var labels = [
+    { dataLayer: 'turvalaite', minzoom: 12, symbolizer: teksti(['nimi'], { fill: '#6a0010', fontSize: 11 }) },
+    { dataLayer: 'osoite', minzoom: 17, symbolizer: teksti(['osoite'], { fill: '#0b4a6f', fontSize: 11 }) },
+    { dataLayer: 'tie', minzoom: 14, filter: function (z, f) { return !!f.props.nimi; }, symbolizer: new P.LineLabelSymbolizer({ labelProps: ['nimi'], fill: '#333', stroke: '#fff', width: 3, fontSize: 11, fontFamily: 'sans-serif' }) },
+    { dataLayer: 'kiinteistotunnus', minzoom: 17, symbolizer: teksti(['tunnus'], { fill: '#7a2d78', fontSize: 10 }) },
+    { dataLayer: 'vesiliikennemerkki', minzoom: 15, symbolizer: teksti(['rajoitusarvo'], { fill: '#a00', fontSize: 10 }) }
+  ];
+  var vektori = P.leafletLayer({ url: 'nasijarvi.pmtiles', paintRules: paint, labelRules: labels, maxDataZoom: 16, tileSize: 256 });
+  vektori.on('load', function () { tila.vektoriValmis = true; });
+
+  var kaikki = { maasto: maasto, puusto: puusto, vektori: vektori };
+  if (on('maasto')) maasto.addTo(kartta);
+  if (paalle.indexOf('puusto') >= 0) puusto.addTo(kartta);
+  if (on('vektori')) vektori.addTo(kartta);
+  document.querySelectorAll('#paneeli input').forEach(function (cb) {
+    var t = cb.dataset.taso;
+    cb.checked = (t === 'puusto') ? paalle.indexOf('puusto') >= 0 : (pois.indexOf(t) < 0);
+    cb.addEventListener('change', function () {
+      if (t === 'kiinteisto' || t === 'valot') { var u = new URL(location.href); var arr = (u.searchParams.get('pois') || '').split(',').filter(Boolean).filter(function (x) { return x !== t; }); if (!cb.checked) arr.push(t); u.searchParams.set('pois', arr.join(',')); location.href = u.toString(); return; }
+      var k = kaikki[t]; if (cb.checked) k.addTo(kartta); else kartta.removeLayer(k);
+    });
+  });
+
+  // Lähdemerkinnät aineisto.json:sta
+  fetch('aineisto.json').then(function (r) { return r.json(); }).then(function (a) {
+    document.getElementById('lahde').textContent = a.lahdemerkinta_yhteensa + ' Aineistopaketti ' + a.paiva + '. Ei navigointikäyttöön.';
+    tila.aineisto = a.paiva;
+  }).catch(function () { document.getElementById('lahde').textContent = 'Aineistokuvausta (aineisto.json) ei voitu lukea.'; });
+
+  // Odotus kuvakaappauksia varten: kaikki tiilet haettu ja piirretty
+  tila.valmis = function () { return tila.kuormia === 0 && tila.vektoriValmis && tila.maastoValmis; };
+  kartta.on('click', function (e) {
+    var tulos = vektori.queryTileFeaturesDebug(e.latlng.lng, e.latlng.lat, 8), rivit = [];
+    tulos.forEach(function (lista) { lista.forEach(function (pf) { rivit.push(pf.layerName + ' ' + JSON.stringify(pf.feature.props)); }); });
+    if (rivit.length) L.popup().setLatLng(e.latlng).setContent('<div style="font-size:11px;max-width:300px">' + rivit.slice(0, 6).join('<br>') + '</div>').openOn(kartta);
+  });
+})();
+</script>
+</body>
+</html>
