@@ -30,12 +30,22 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Asenna työkalut
-        timeout-minutes: 12
+      - name: Asenna työkalut, apt-pakettilistat
+        timeout-minutes: 6
+        run: sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 update
+
+      - name: Asenna työkalut, apt-paketit
+        timeout-minutes: 8
+        env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
         run: |
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
-          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdal-bin python3-gdal python3-numpy python3-pil \
-            python3-pyproj python3-shapely python3-pip tippecanoe
+          sudo -E apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
+            gdal-bin python3-gdal python3-numpy python3-pil python3-pyproj python3-shapely python3-pip tippecanoe
+
+      - name: Asenna työkalut, pip-paketit
+        timeout-minutes: 6
+        run: |
           sudo python3 -m pip install --break-system-packages pmtiles mapbox-vector-tile jsonschema laspy lazrs
           tippecanoe --version
           gdalinfo --version
