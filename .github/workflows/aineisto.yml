@@ -15,7 +15,7 @@ permissions:
 
 concurrency:
   group: aineisto
-  cancel-in-progress: false
+  cancel-in-progress: true       # uusi ajo korvaa kesken olevan (tarvitaan, jos asennusaskel jää jumiin eikä ajoa voi peruuttaa muuten)
 
 jobs:
   rakenna:
@@ -31,9 +31,10 @@ jobs:
           persist-credentials: false
 
       - name: Asenna työkalut
+        timeout-minutes: 12
         run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gdal-bin python3-gdal python3-numpy python3-pil \
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 update
+          sudo apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 install -y --no-install-recommends gdal-bin python3-gdal python3-numpy python3-pil \
             python3-pyproj python3-shapely python3-pip tippecanoe
           sudo python3 -m pip install --break-system-packages pmtiles mapbox-vector-tile jsonschema laspy lazrs
           tippecanoe --version
