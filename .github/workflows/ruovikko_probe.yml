@@ -42,12 +42,28 @@ jobs:
         shell: bash
         run: |
           cd ulos_koe
-          sudo apt-get install -y --no-install-recommends gdal-bin >/dev/null 2>&1
-          unzip -o -q clc.zip Clc2018_FI20m.tif.vat.dbf Clc2018_FI20m.tif.xml Clc2018_FI20m.tif.aux.xml Clc2018_FI20m.tfw
-          { echo; echo "## vat.dbf (ogrinfo)"; echo '```'; ogrinfo -al -geom=NO Clc2018_FI20m.tif.vat.dbf | head -400; echo '```'
-            echo "## xml"; echo '```'; head -c 4000 Clc2018_FI20m.tif.xml; echo; echo '```'
+          unzip -o -q clc.zip Clc2018_FI20m.tif.vat.dbf Clc2018_FI20m.tif.xml Clc2018_FI20m.tif.aux.xml Clc2018_FI20m.tfw || echo "unzip epäonnistui" >> ruovikko.md
+          python3 - >> ruovikko.md 2>&1 <<'PY' || true
+          import struct
+          d = open("Clc2018_FI20m.tif.vat.dbf", "rb").read()
+          n, hl, rl = struct.unpack("<xxxxIHH", d[:12])
+          kentat = []
+          o = 32
+          while d[o] != 0x0D:
+              nimi = d[o:o+11].split(b"\x00")[0].decode(); pit = d[o+16]
+              kentat.append((nimi, pit)); o += 32
+          print("\n## vat.dbf: %d riviä, kentät %s" % (n, kentat))
+          print("```")
+          for i in range(n):
+              r = d[hl + i*rl: hl + (i+1)*rl]; p = 1; rivi = []
+              for nimi, pit in kentat:
+                  rivi.append(r[p:p+pit].decode("latin-1").strip()); p += pit
+              print(" | ".join(rivi))
+          print("```")
+          PY
+          { echo; echo "## xml"; echo '```'; head -c 3000 Clc2018_FI20m.tif.xml; echo; echo '```'
             echo "## aux.xml"; echo '```'; head -c 1500 Clc2018_FI20m.tif.aux.xml; echo; echo '```'
-            echo "## gdalinfo (zip, vsizip)"; echo '```'; gdalinfo /vsizip/clc.zip/Clc2018_FI20m.tif 2>&1 | head -40; echo '```'; } >> ruovikko.md 2>&1
+            echo "## tfw"; cat Clc2018_FI20m.tfw; } >> ruovikko.md 2>&1
       - name: Julkaise yhteenveto haaraan ajoloki-ruovikko
         if: always()
         shell: bash
