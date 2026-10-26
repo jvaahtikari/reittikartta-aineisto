@@ -277,6 +277,48 @@ def maasto():
     return t
 
 
+def ruovikko():
+    t = ["## 6b. Ruovikot (SYKE Corine 2018, luokka 42)"]
+    km = lue(TYO / "kerrosmaarat.json") or {}
+    lok = (lue(TYO / "lataus_loki.json") or {}).get("corine") or {}
+    ain = lue(ULOS / "aineisto.json") or {}
+    t.append("- Kerroksen `ruovikko` kohteita (polygoneja rantavyöhykkeellä, GeoJSON-vaiheessa): %s." % km.get("ruovikko"))
+    t.append("- Corine-lataus: haettu %s, siirretty %s Mt, %s s. Lähde `syke_corine` aineisto.json:ssa: %s." % (
+        lok.get("haettu"), luku((lok.get("siirretty_tavua") or 0) / 1e6, 1), lok.get("sekuntia"), any(l.get("id") == "syke_corine" for l in ain.get("lahteet", []))))
+    kl = ((ain.get("tiilet") or {}).get("vektori") or {}).get("kerrokset") or {}
+    if "ruovikko" in kl:
+        t.append("- aineisto.json: kerros ruovikko, minzoom %s, kuvaus: %s" % (kl["ruovikko"].get("minzoom"), kl["ruovikko"].get("kuvaus")))
+    try:
+        import gzip
+        import math
+        import mapbox_vector_tile
+        from pmtiles.reader import MmapSource, Reader
+        with open(ULOS / "nasijarvi.pmtiles", "rb") as f:
+            r = Reader(MmapSource(f))
+            n = 2 ** 13
+            def xy(lon, lat):
+                return int((lon + 180) / 360 * n), int((1 - math.asinh(math.tan(math.radians(lat))) / math.pi) / 2 * n)
+            x0, y1 = xy(23.60, 61.47)
+            x1, y0 = xy(23.95, 61.58)
+            tiiliä, kohteita, kärkiä = 0, 0, 0
+            for x in range(x0, x1 + 1):
+                for y in range(y0, y1 + 1):
+                    d = r.get(13, x, y)
+                    if not d:
+                        continue
+                    k = mapbox_vector_tile.decode(gzip.decompress(d)).get("ruovikko")
+                    if k and k["features"]:
+                        tiiliä += 1
+                        kohteita += len(k["features"])
+                        for ft in k["features"]:
+                            g = ft["geometry"]
+                            kärkiä += sum(len(ring) for poly in (g["coordinates"] if g["type"] == "MultiPolygon" else [g["coordinates"]]) for ring in poly)
+        t.append("- Vektoritiilet z13, laatikko lon 23,60-23,95 ja lat 61,47-61,58: %d tiiltä, joissa ruovikkokerros, yhteensä %d kohdetta ja %d kärkeä." % (tiiliä, kohteita, kärkiä))
+    except Exception as e:  # noqa: BLE001
+        t.append("- Tiilitarkistus ei onnistunut: %s" % repr(e)[:200])
+    return t
+
+
 def puusto():
     t = ["## 6. Puusto ja lehtipuuosuus"]
     s = lue(TYO / "puusto_tilasto.json")
@@ -349,7 +391,7 @@ def main(argv):
              "- Kirjoitettu: %s UTC." % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(nyt)),
              "- Kesto tähän asti: %s s." % (luku(nyt - alku, 0) if alku else "-"),
              "- Työnkulun tila ennen tätä askelta: %s." % os.environ.get("AJO_TILA", "-"), ""]
-    for osa in (laserosa, lambda: tarkistuskohteet(tark), maamerkit, lambda: aluevertailut(tark), lambda: rakennukset(tark), lambda: muut_tarkistukset(tark), maasto, puusto, tarkistus_py, koot, lokit):
+    for osa in (laserosa, lambda: tarkistuskohteet(tark), maamerkit, lambda: aluevertailut(tark), lambda: rakennukset(tark), lambda: muut_tarkistukset(tark), maasto, puusto, ruovikko, tarkistus_py, koot, lokit):
         try:
             rivit += osa() + [""]
         except Exception as e:  # noqa: BLE001
