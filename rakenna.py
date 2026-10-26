@@ -68,6 +68,7 @@ KERROKSET = {
     "nopeusrajoitus": dict(tyyppi="polygon", minzoom=10, kuvaus="Vesiväylien nopeusrajoitusalueet"),
     "sulkukanava": dict(tyyppi="polygon", minzoom=8, kuvaus="Sulkukanavat ja avattavat sillat"),
     "rantaviiva": dict(tyyppi="line", minzoom=8, kuvaus="Rantaviiva (järvien yhdistetty reuna)"),
+    "ruovikko": dict(tyyppi="polygon", minzoom=11, kuvaus="Ruovikot ja muut vesikasvustot rantavyöhykkeellä (SYKE Corine 2018, luokka sisämaan kosteikot vedessä, 20 m)"),
     "syvyysalue": dict(tyyppi="polygon", minzoom=8, kuvaus="Syvyysalueet (Traficom)"),
     "syvyyskayra": dict(tyyppi="line", minzoom=10, kuvaus="Syvyyskäyrät (Traficom)"),
     "syvyyspiste": dict(tyyppi="point", minzoom=12, kuvaus="Syvyyspisteet (Traficom)"),
@@ -173,6 +174,46 @@ def tee_tie():
             yield piirre(g, {"luokka": p["luokka"], "nimi": p["nimi"] or None, "tienumero": p["tienumero"] or None,
                              "paallyste": p["paallyste"], "taso": p["taso"]}, minzoom=TIE_MINZOOM.get(p["luokka"], 12))
     return kirjoita_rivit(GJ / "tie.geojsonl", r())
+
+
+def tee_ruovikko():
+    """Ruovikot: SYKEn Corine 2018 -rasterin luokka 42 (sisämaan kosteikot vedessä, CLC 4112) rantavyöhykkeellä polygoneiksi.
+    Valinnainen: jos rasteria ei ole (lataus epäonnistui), kerrosta ei tehdä."""
+    polku = TYO / "corine_maanpeite.tif"
+    ulos = GJ / "ruovikko.geojsonl"
+    if not polku.exists():
+        loki("Corine-rasteria ei ole, ruovikkokerrosta ei tehdä")
+        ulos.unlink(missing_ok=True)
+        return 0
+    from lataa import CORINE_LUOKKA_RUOVIKKO, lataa_aoi
+    ds = gdal.Open(str(polku))
+    gt, w, h = ds.GetGeoTransform(), ds.RasterXSize, ds.RasterYSize
+    arr = ds.GetRasterBand(1).ReadAsArray()
+    maski = (arr == CORINE_LUOKKA_RUOVIKKO).astype(np.uint8)
+    mem = gdal.GetDriverByName("MEM").Create("", w, h, 1, gdal.GDT_Byte)
+    mem.SetGeoTransform(gt)
+    mem.SetProjection(ds.GetProjection())
+    mem.GetRasterBand(1).WriteArray(maski)
+    vk = ogr.GetDriverByName("Memory").CreateDataSource("")
+    kl = vk.CreateLayer("r", None, ogr.wkbPolygon)
+    kl.CreateField(ogr.FieldDefn("dn", ogr.OFTInteger))
+    gdal.Polygonize(mem.GetRasterBand(1), mem.GetRasterBand(1), kl, 0)
+    vesi, alue, vyohyke, _ = lataa_aoi()
+    pv = prep(vyohyke)
+    rr = []
+    for f in kl:
+        if f["dn"] != 1:
+            continue
+        g = swkb.loads(bytes(f.GetGeometryRef().ExportToWkb()))
+        if not pv.intersects(g):
+            continue
+        g = g.intersection(vyohyke).simplify(3.0)
+        if g.is_empty or g.area < 400.0:
+            continue
+        g = transform(T3067_4326.transform, g)
+        rr.append(piirre(g, {"luokka": "ruovikko", "clc": 4112, "selite": "Sisämaan kosteikot vedessä (Corine 2018, 20 m)"}))
+    n = kirjoita_rivit(ulos, rr)
+    return n
 
 
 def tee_rantaviiva():
@@ -470,8 +511,16 @@ def rakenna_vektori():
     t = time.time()
     for nimi, fn in (("rakennus", tee_rakennus), ("kiinteisto", tee_kiinteisto), ("maastokuvio", tee_maastokuvio),
                      ("tie", tee_tie), ("rantaviiva", tee_rantaviiva), ("osoite", tee_osoite),
-                     ("vesieste", tee_vesieste)):
-        maarat[nimi] = fn()
+                     ("vesieste", tee_vesieste), ("ruovikko", tee_ruovikko)):
+        try:
+            maarat[nimi] = fn()
+        except Exception:  # noqa: BLE001
+            if nimi != "ruovikko":          # ruovikot ovat valinnainen kerros, muiden virhe keskeyttää
+                raise
+            traceback.print_exc()
+            loki("VAROITUS: ruovikkokerroksen teko epäonnistui, kerros jätetään pois")
+            (GJ / "ruovikko.geojsonl").unlink(missing_ok=True)
+            maarat[nimi] = 0
         loki("kerros %s: %s kohdetta" % (nimi, maarat[nimi]))
     maarat.update(tee_vayla(alue))
     loki("Väylävirasto:", {k: v for k, v in maarat.items() if k in ("turvalaite", "navigointilinja", "vaylaalue")})
@@ -491,7 +540,7 @@ def rakenna_vektori():
                  ("taululinja", "taululinja"), ("vesiliikennemerkki", "vesiliikennemerkki"),
                  ("nopeusrajoitus", "nopeusrajoitus"), ("sulkukanava", "sulkukanava"), ("rantaviiva", "rantaviiva"),
                  ("syvyysalue", "syvyysalue"), ("syvyyskayra", "syvyyskayra"), ("syvyyspiste", "syvyyspiste"),
-                 ("vesieste", "vesieste")]
+                 ("vesieste", "vesieste"), ("ruovikko", "ruovikko")]
     for tiedosto, nimi in kerrokset:
         polku = GJ / (tiedosto + ".geojsonl")
         if not polku.exists() or polku.stat().st_size == 0:
@@ -681,6 +730,66 @@ def rakenna_maasto(kvantti=None):
                                                     sekuntia=round(time.time() - t, 1)))
 
 
+LEHTIPUU_ASKEL_PROS = 10        # lehtipuuosuus koodataan alfakanavaan 10 %-yksikön askelin: A = 255 - lattia((osuus + 5) / 10)
+LEHTIPUU_TEEMAT = ("manty", "kuusi", "koivu", "muulp", "tilavuus", "lehtip_latvuspeitto", "latvuspeitto")
+
+
+def laske_lehtipuuosuus():
+    """Laskee Luken lajitilavuuksista lehtipuuosuuden (0-100 %) 16 m:n ruudukkoon tiedostoon tyo/luke_lehtipuuosuus.tif.
+
+    Osuus = (koivu + muu lehtipuu) / (mänty + kuusi + koivu + muu lehtipuu) * 100 tilavuuden (m3/ha) mukaan. Ruuduissa, joissa lajitilavuuksien
+    summa on 0 mutta metsämaalla on latvuspeittoa (taimikot, harvat kuviot), osuus on lehtipuiden latvuspeitto jaettuna kokonaislatvuspeitolla.
+    Muissa metsämaan ruuduissa osuus on 0. Ei-metsämaa ja ei-data (32766, 32767) on 32767.
+    Palauttaa (polku, tilasto) tai (None, syy), jos jokin teema puuttuu.
+    """
+    polut = {n: TYO / ("luke_%s.tif" % n) for n in LEHTIPUU_TEEMAT}
+    puuttuu = [n for n, p in polut.items() if not p.exists()]
+    if puuttuu:
+        return None, "teemat puuttuvat: " + ", ".join(puuttuu)
+    A = {}
+    ref = None
+    for n, p in polut.items():
+        ds = gdal.Open(str(p))
+        if ref is None:
+            ref = ds
+            gt, proj = ds.GetGeoTransform(), ds.GetProjection()
+            w, h = ds.RasterXSize, ds.RasterYSize
+        elif (ds.RasterXSize, ds.RasterYSize) != (w, h) or ds.GetGeoTransform() != gt:
+            return None, "teeman %s ruudukko poikkeaa muista" % n
+        A[n] = ds.GetRasterBand(1).ReadAsArray().astype(np.float64)
+    def kelvollinen(x):
+        return x < 32766
+
+    laji_ok = kelvollinen(A["manty"]) & kelvollinen(A["kuusi"]) & kelvollinen(A["koivu"]) & kelvollinen(A["muulp"])
+    summa = np.where(laji_ok, A["manty"] + A["kuusi"] + A["koivu"] + A["muulp"], 0.0)
+    lehti = np.where(laji_ok, A["koivu"] + A["muulp"], 0.0)
+    metsa = kelvollinen(A["latvuspeitto"]) | laji_ok          # Luken aineisto on määritelty vain metsä-, kitu- ja joutomaalla
+    osuus = np.zeros((h, w), dtype=np.float64)
+    tilav = laji_ok & (summa > 0)
+    osuus[tilav] = 100.0 * lehti[tilav] / summa[tilav]
+    vara = metsa & ~tilav & kelvollinen(A["latvuspeitto"]) & kelvollinen(A["lehtip_latvuspeitto"]) & (A["latvuspeitto"] > 0)
+    osuus[vara] = 100.0 * A["lehtip_latvuspeitto"][vara] / A["latvuspeitto"][vara]
+    osuus = np.clip(osuus, 0.0, 100.0)
+    ulos = np.where(metsa, osuus, 32767.0).astype(np.float32)
+    drv = gdal.GetDriverByName("GTiff")
+    kohde = TYO / "luke_lehtipuuosuus.tif"
+    ds = drv.Create(str(kohde), w, h, 1, gdal.GDT_Float32, options=["COMPRESS=DEFLATE", "TILED=YES", "PREDICTOR=3"])
+    ds.SetGeoTransform(gt)
+    ds.SetProjection(proj)
+    b = ds.GetRasterBand(1)
+    b.SetNoDataValue(32767.0)
+    b.WriteArray(ulos)
+    ds.FlushCache()
+    ds = None
+    ok = metsa
+    tilasto = {"metsaruutuja": int(ok.sum()), "laskettu_tilavuudesta": int((ok & tilav).sum()), "laskettu_latvuspeitosta": int(vara.sum()),
+               "nollattu_ei_puustoa": int((ok & ~tilav & ~vara).sum()),
+               "osuus_prosenttipisteet_p10_p50_p90": [round(float(v), 1) for v in np.percentile(osuus[ok], [10, 50, 90])] if ok.any() else None,
+               "tilavuuspainotettu_keskiarvo_pros": round(100.0 * float(lehti[tilav].sum()) / max(1.0, float(summa[tilav].sum())), 1),
+               "yli_50_pros_ruutujen_osuus_pros": round(100.0 * float((osuus[ok] > 50).mean()), 1) if ok.any() else None}
+    return str(kohde), tilasto
+
+
 def rakenna_puusto():
     from lataa import lataa_aoi
     vesi, alue, vyohyke, tied = lataa_aoi()
@@ -688,6 +797,15 @@ def rakenna_puusto():
     vesi_wm = transform(T3067_3857.transform, vesi.simplify(3)).buffer(0)
     kp = str(TYO / "luke_keskipituus.tif")
     lp = str(TYO / "luke_latvuspeitto.tif")
+    try:
+        lo, lehti_tilasto = laske_lehtipuuosuus()
+    except Exception as e:  # noqa: BLE001
+        traceback.print_exc()
+        lo, lehti_tilasto = None, "laskenta epäonnistui: " + repr(e)[:200]
+    if lo:
+        loki("Lehtipuuosuus laskettu: %s" % lehti_tilasto)
+    else:
+        loki("Lehtipuuosuutta ei lasketa (%s): alfakanava on 255 kaikkialla metsämaalla, kuten ennen vaihetta 1c" % lehti_tilasto)
     tiilet = []
     for z in range(PUUSTO_MINZ, PUUSTO_MAXZ + 1):
         tiilet += tiilet_alueelle(alue_wm, z, jata_pois=vesi_wm)
@@ -709,7 +827,15 @@ def rakenna_puusto():
         rgba[..., 0] = (v >> 8) & 255
         rgba[..., 1] = v & 255
         rgba[..., 2] = np.where(ok, np.clip(np.round(c), 0, 100), 0).astype(np.uint8)
-        rgba[..., 3] = np.where(ok, 255, 0).astype(np.uint8)
+        # Alfakanava: 0 = ei metsämaata tai ei dataa (kuten ennenkin). Metsämaalla 255 - lattia((lehtipuuosuus + 5) / 10), eli 255 ... 245.
+        # Arvot pysyvät lähellä 255:ää, jotta selaimen alfa-esikertova kanvas ei muuta R-, G- ja B-arvoja yli yhden yksikön.
+        alfa = np.full(ok.shape, 255, dtype=np.int64)
+        if lo:
+            l = warp_muistiin(lo, bbox, TERRAIN_TILE_PX, alg, float(EI), tyyppi=gdal.GDT_Float32, src_nodata=float(EI))
+            lok = np.isfinite(l) & (l < 32000)
+            k = np.floor((np.clip(np.where(lok, l, 0.0), 0.0, 100.0) + LEHTIPUU_ASKEL_PROS / 2.0) / LEHTIPUU_ASKEL_PROS).astype(np.int64)
+            alfa = np.where(lok, 255 - k, 255)
+        rgba[..., 3] = np.where(ok, alfa, 0).astype(np.uint8)
         tilasto["tiilia"] += 1
         return png_tavut(rgba)
 
@@ -717,16 +843,18 @@ def rakenna_puusto():
     bb = tied["bbox_4326"]
     meta = {"name": "Nasijarven puusto", "format": "png", "type": "overlay", "encoding": "puusto",
             "description": "RGBA PNG. Keskipituus desimetreina = R*256 + G. Latvuspeitto prosentteina = B. "
-                           "A=0: ei metsamaata tai ei dataa. Luke MVMI 2023, 16 m.",
+                           "A=0: ei metsamaata tai ei dataa. A>0: metsamaata, ja lehtipuuosuus (koivu ja muu lehtipuu, tilavuuden mukaan) "
+                           "prosentteina = (255 - A) * 10 (A=255: 0-4 %, A=254: 5-14 %, ..., A=245: 95-100 %). Luke MVMI 2023, 16 m.",
             "attribution": "Luonnonvarakeskus, monilahteinen valtakunnan metsien inventointi 2023, CC BY 4.0",
-            "tile_size": TERRAIN_TILE_PX}
+            "tile_size": TERRAIN_TILE_PX, "lehtipuuosuus_alfassa": bool(lo)}
     t = time.time()
     polku = TYO / "puusto.pmtiles"
     n, koko = pmtiles_kirjoita(polku, tiilet, tuota, TileType.PNG, meta, PUUSTO_MINZ, PUUSTO_MAXZ, bb,
                                ((bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2, 11))
     loki("puusto.pmtiles: %d tiiltä, %.1f Mt, %.0f s" % (n, koko / 1e6, time.time() - t))
     shutil.copyfile(polku, ULOS / "puusto.pmtiles")
-    kirjoita_json(TYO / "puusto_tilasto.json", dict(tilasto, tiilia_pmtiles=n, tavua=koko, sekuntia=round(time.time() - t, 1)))
+    kirjoita_json(TYO / "puusto_tilasto.json", dict(tilasto, tiilia_pmtiles=n, tavua=koko, sekuntia=round(time.time() - t, 1),
+                                                    lehtipuuosuus=lehti_tilasto, lehtipuuosuus_alfassa=bool(lo)))
 
 
 TERRAIN_KVANTTI = 0.5
@@ -760,12 +888,20 @@ LAHTEET = [
      "lisenssi": "CC BY 4.0", "lisenssi_url": "https://creativecommons.org/licenses/by/4.0/",
      "lahdemerkinta": "Sisältää Digi- ja väestötietoviraston rakennusten osoitetietoja (poiminta 3.2.2025, CC BY 4.0).",
      "huomio": "DVV lopetti aineiston avoimen jakelun 14.3.2025. Tämä on viimeinen avoin versio eikä se päivity."},
-    {"id": "luke_mvmi", "nimi": "Monilähteinen valtakunnan metsien inventointi 2023: puuston keskipituus ja latvuspeitto",
+    {"id": "luke_mvmi", "nimi": "Monilähteinen valtakunnan metsien inventointi 2023: puuston keskipituus, latvuspeitto ja lehtipuuosuus",
      "tuottaja": "Luonnonvarakeskus", "ehtotiedosto": "Luke",
      "osoite": PAITULI + "luke/vmi/2023/", "kerrokset": ["puusto.pmtiles"],
      "lisenssi": "CC BY 4.0", "lisenssi_url": "https://creativecommons.org/licenses/by/4.0/",
      "lahdemerkinta": "Sisältää Luonnonvarakeskuksen monilähteisen valtakunnan metsien inventoinnin 2023 aineistoa (CC BY 4.0).",
-     "huomio": "Resoluutio 16 m. Keskipituus desimetreinä, latvuspeitto prosentteina, 32767 = ei metsämaata tai ei dataa."},
+     "huomio": "Resoluutio 16 m. Keskipituus desimetreinä, latvuspeitto prosentteina, 32767 = ei metsämaata tai ei dataa. Lehtipuuosuus (koivu ja muu lehtipuu "
+              "tilavuuden mukaan, vaihe 1c) lasketaan Luken lajikohtaisista tilavuusrastereista (manty, kuusi, koivu, muu lehtipuu, m3/ha) ja koodataan puusto.pmtiles-tiilien alfakanavaan: "
+              "A = 255 - lattia((osuus_% + 5) / 10), eli lehtipuuosuus % = (255 - A) * 10 +/- 5, A=0 on ei metsämaata."},
+    {"id": "syke_corine", "nimi": "Corine maanpeite 2018 (20 m): ruovikot rantavyöhykkeellä",
+     "tuottaja": "Suomen ympäristökeskus (Syke)", "ehtotiedosto": None,
+     "osoite": "https://wwwd3.ymparisto.fi/d3/Static_rs/spesific/clc2018_fi20m.zip", "kerrokset": ["ruovikko"],
+     "lisenssi": "CC BY 4.0", "lisenssi_url": "https://creativecommons.org/licenses/by/4.0/",
+     "lahdemerkinta": "Sisältää Suomen ympäristökeskuksen Corine maanpeite 2018 -aineistoa (CC BY 4.0).",
+     "huomio": "Kansallinen 20 m:n rasteri. Ruovikoksi tulkitaan luokka 42 eli sisämaan kosteikot vedessä (CLC 4112), rantavyöhykkeellä. 20 m:n ruudut, joten kapeat ruovikot puuttuvat ja reunat ovat porrasmaisia."},
     {"id": "vayla_wfs", "nimi": "Väyläviraston vesiväyläaineisto (Väylätiedot WFS)",
      "tuottaja": "Väylävirasto", "ehtotiedosto": None,
      "osoite": VAYLA_WFS, "kerrokset": ["turvalaite", "navigointilinja", "vaylaalue", "vayla", "taululinja",
@@ -804,6 +940,8 @@ def rakenna_kuvaus():
     kk, vuosi = traficom_haettu[5:7], traficom_haettu[:4]
     lahteet = []
     for l in LAHTEET:
+        if l["id"] == "syke_corine" and not maarat.get("ruovikko"):
+            continue                                    # valinnainen lähde mukaan vain, jos ruovikkokerros syntyi
         d = dict(l)
         d["lahdemerkinta"] = d["lahdemerkinta"].format(kk=kk, vuosi=vuosi)
         et = d.pop("ehtotiedosto")
@@ -812,6 +950,9 @@ def rakenna_kuvaus():
             d["ehtoteksti_sanatarkasti"] = ("The data in this service is licensed under a Creative Commons Attribution 4.0 "
                                             "license - http://creativecommons.org/licenses/by/4.0/ (WFS GetCapabilities, "
                                             "AccessConstraints). Palvelun kuvaus: Aineisto ei sovellu navigointikäyttöön.")
+        if d["id"] == "syke_corine":
+            d["ehtoteksti_sanatarkasti"] = ("Lisenssi: Creative Commons Nimeä 4.0 Kansainvälinen (CC BY 4.0). Käyttörajoitukset: ei rajoituksia (no limitations). "
+                                            "Lähde: SYKE avoin tieto, Corine maanpeite 2018, ckanfeo.ymparisto.fi/dataset/corine-maanpeite-2018, luettu 26.10.2026.")
         if d["id"] == "traficom_syvyys":
             caps = RAAKA / "traficom" / "capabilities.xml"
             teksti = None
@@ -822,7 +963,7 @@ def rakenna_kuvaus():
         # haku- ja siirtotiedot lokista
         avain = {"mml_maastotietokanta": "mtk", "mml_kiinteisto": "kiinteisto", "mml_korkeusmalli": "dem2",
                  "dvv_osoitteet": "dvv", "luke_mvmi": "luke_keskipituus", "vayla_wfs": "vayla",
-                 "traficom_syvyys": "traficom"}[d["id"]]
+                 "traficom_syvyys": "traficom", "syke_corine": "corine"}[d["id"]]
         lo = loki_.get(avain) or {}
         d["haettu"] = lo.get("haettu")
         d["siirretty_tavua"] = lo.get("tavua") or lo.get("siirretty_tavua")
@@ -872,9 +1013,13 @@ def rakenna_kuvaus():
                        "kvantisointi_m": ms.get("kvantti", TERRAIN_KVANTTI),
                        "puuttuva_tiili": "Tiili puuttuu, jos se on kokonaan vesialuetta. Järven pinta on noin 95,5 m (N2000).",
                        "järven_pinta_m": 95.5},
-            "puusto": {"tiedosto": "puusto.pmtiles", "muoto": "png", "koodaus": "RGBA: pituus_dm = R*256 + G, latvuspeitto_% = B, A=0 ei metsämaata",
+            "puusto": {"tiedosto": "puusto.pmtiles", "muoto": "png",
+                       "koodaus": "RGBA: pituus_dm = R*256 + G, latvuspeitto_% = B, A=0 ei metsämaata, muuten lehtipuuosuus_% = (255 - A) * 10 (A 255...245, tarkkuus +/- 5 %-yksikköä)",
+                       "lehtipuuosuus": {"kanava": "A", "kaava": "lehtipuuosuus_pros = (255 - A) * 10", "tarkkuus_pros": 5, "alue_A": [245, 255],
+                                         "ei_metsamaata": "A = 0", "ei_tietoa_yhteensopivuus": "Ennen vaihetta 1c A oli 0 tai 255. Vanha lukija, joka tutkii vain A > 0, toimii ennallaan.",
+                                         "huomio": "A pidetään lähellä 255:tä, koska selaimen kuvaprosessointi (createImageBitmap ja 2D-kanvas) kertoo värit alfalla, jolloin pienet alfat vääristävät R, G ja B."},
                        "tiilen_koko_px": TERRAIN_TILE_PX, "minzoom": PUUSTO_MINZ, "maxzoom": PUUSTO_MAXZ,
-                       "lahde": "Luke MVMI 2023, keskipituus (dm) ja latvuspeitto (%), 16 m"},
+                       "lahde": "Luke MVMI 2023, keskipituus (dm), latvuspeitto (%) ja lajitilavuudet (lehtipuuosuus), 16 m"},
         },
         "lahteet": lahteet,
         "kayttorajoitukset": {
@@ -885,7 +1030,8 @@ def rakenna_kuvaus():
         "lahdemerkinta_yhteensa": " ".join(l["lahdemerkinta"] for l in lahteet),
         "kerrosmaarat": maarat,
         "lataustiedot": {k: v for k, v in loki_.items() if k in ("mtk", "kiinteisto", "tienimet", "dvv", "dem10", "dem2",
-                                                                    "luke_keskipituus", "luke_latvuspeitto", "vayla", "traficom")},
+                                                                    "luke_keskipituus", "luke_latvuspeitto", "luke_manty", "luke_kuusi", "luke_koivu", "luke_muulp",
+                                                                    "luke_tilavuus", "luke_lehtip_latvuspeitto", "corine", "vayla", "traficom")},
     }
     kirjoita_json(ULOS / "aineisto.json", kuvaus)
     loki("aineisto.json kirjoitettu")
@@ -925,6 +1071,7 @@ KENTAT = {
                     "alusleveys": "alusten suurin leveys (m)", "aluspituus": "alusten suurin pituus (m)", "alussyvyys": "alusten suurin syväys (m)",
                     "aluskorkeus": "alusten suurin korkeus (m)", "kayttoselite": "käyttöselite"},
     "rantaviiva": {"luokka": "jarvi"},
+    "ruovikko": {"luokka": "aina 'ruovikko'", "clc": "Corine-luokan koodi (4112 = sisämaan kosteikot vedessä)", "selite": "luokan nimi"},
     "syvyysalue": {"alin": "alin syvyys (m, DRVAL1)", "ylin": "ylin syvyys (m, DRVAL2)", "mitattu": "mittauspäivä (SORDAT)"},
     "syvyyskayra": {"syvyys": "syvyys (m)", "mitattu": "mittauspäivä"},
     "syvyyspiste": {"syvyys": "syvyys (m)", "taso": "vertaustaso", "mitattu": "mittauspäivä"},

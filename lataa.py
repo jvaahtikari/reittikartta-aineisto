@@ -14,7 +14,8 @@ Vaiheet suoritetaan tässä järjestyksessä:
   dvv        DVV:n osoiteaineisto
   dem10      Korkeusmalli 10 m
   dem2       Korkeusmalli 2 m rantavyöhykkeeltä
-  luke       Luken puuston keskipituus ja latvuspeitto
+  luke       Luken puuston keskipituus, latvuspeitto ja lajitilavuudet (lehtipuuosuus)
+  corine     SYKEn Corine 2018 -rasteri (ruovikot, valinnainen)
   vayla      Väyläviraston WFS-kerrokset
   traficom   Traficomin syvyysaineisto
 
@@ -746,19 +747,39 @@ def vaihe_dem2():
 # ----------------------------------------------------------------------------------------
 # Luke MVMI 2023
 # ----------------------------------------------------------------------------------------
+# Luken lataamat teemat: nimi paketissa -> (tiedosto Paitulissa, yksikkö). Keskipituus ja latvuspeitto ovat pakollisia (puusto.pmtiles),
+# lajitilavuudet ja lehtipuiden latvuspeitto (vaihe 1c) ovat lehtipuuosuuden laskentaa varten. Lajitilavuuksien yksikkö on m3/ha.
+LUKE_TEEMAT = [
+    ("keskipituus", "keskipituus_vmi1x_1923.tif", "dm", True),
+    ("latvuspeitto", "latvuspeitto_vmi1x_1923.tif", "%", True),
+    ("manty", "manty_vmi1x_1923.tif", "m3/ha", False),
+    ("kuusi", "kuusi_vmi1x_1923.tif", "m3/ha", False),
+    ("koivu", "koivu_vmi1x_1923.tif", "m3/ha", False),
+    ("muulp", "muulp_vmi1x_1923.tif", "m3/ha", False),
+    ("tilavuus", "tilavuus_vmi1x_1923.tif", "m3/ha", False),
+    ("lehtip_latvuspeitto", "lehtip_latvuspeitto_vmi1x_1923.tif", "%", False),
+]
+
+
 def vaihe_luke():
     vesi, alue, vyohyke, tied = lataa_aoi()
     b = tied["bbox_3067"]
     tavut_yht = 0
-    for nimi, tiedosto in (("keskipituus", "keskipituus_vmi1x_1923.tif"), ("latvuspeitto", "latvuspeitto_vmi1x_1923.tif")):
+    for nimi, tiedosto, yksikko, pakollinen in LUKE_TEEMAT:
         osoite = PAITULI + "luke/vmi/2023/" + tiedosto
         loki_pol = TYO / ("luke_%s.log" % nimi)
         env = dict(os.environ, CPL_DEBUG="ON", GDAL_HTTP_USERAGENT=KAYTTAJA)
         alku = time.time()
-        with open(loki_pol, "w") as lf:
-            subprocess.run(["gdal_translate", "-q", "-projwin", str(b[0]), str(b[3]), str(b[2]), str(b[1]),
-                            "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "/vsicurl/" + osoite,
-                            str(TYO / ("luke_%s.tif" % nimi))], env=env, stderr=lf, check=True)
+        try:
+            with open(loki_pol, "w") as lf:
+                subprocess.run(["gdal_translate", "-q", "-projwin", str(b[0]), str(b[3]), str(b[2]), str(b[1]),
+                                "-co", "COMPRESS=DEFLATE", "-co", "TILED=YES", "/vsicurl/" + osoite,
+                                str(TYO / ("luke_%s.tif" % nimi))], env=env, stderr=lf, check=True)
+        except Exception as e:  # noqa: BLE001
+            if pakollinen:
+                raise
+            loki("Luke: valinnaista teemaa %s ei saatu (%s), lehtipuuosuutta ei lasketa" % (nimi, repr(e)[:200]))
+            continue
         tavut = 0
         for rivi in open(loki_pol, errors="replace"):
             m = __import__("re").search(r"VSICURL: Downloading (\d+)-(\d+)", rivi)
@@ -766,9 +787,38 @@ def vaihe_luke():
                 tavut += int(m.group(2)) - int(m.group(1)) + 1
         tavut_yht += tavut
         lokiin("luke_" + nimi, osoite=osoite, haettu=nyt_iso(), siirretty_tavua=tavut,
-               sekuntia=round(time.time() - alku, 1), nodata=32767, hilakoko_m=16,
-               yksikko="dm" if nimi == "keskipituus" else "%")
+               sekuntia=round(time.time() - alku, 1), nodata=32767, hilakoko_m=16, yksikko=yksikko)
     loki("Luke ladattu: %.0f Mt" % (tavut_yht / 1e6))
+
+
+# ----------------------------------------------------------------------------------------
+# SYKE Corine maanpeite 2018 (ruovikot, valinnainen, vaihe 1c)
+# ----------------------------------------------------------------------------------------
+# Kansallinen 20 m:n rasteri (zip 273 Mt, tif 207 Mt, EPSG:3067, CC BY 4.0). Latausosoite ja saatavuus GitHub Actionsista tarkistettu 26.10.2026 (HEAD 200, Range tuettu).
+# Luokka 42 (LEVEL4 4112) = Sisämaan kosteikot vedessä (Inland marshes, aquatic), eli ruovikot ja vastaavat vesikasvustot.
+CORINE_OSOITE = "https://wwwd3.ymparisto.fi/d3/Static_rs/spesific/clc2018_fi20m.zip"
+CORINE_TIF = "Clc2018_FI20m.tif"
+CORINE_LUOKKA_RUOVIKKO = 42
+
+
+def vaihe_corine():
+    import zipfile
+    tied = lue_json(TYO / "aoi.json")
+    b = tied["bbox_3067"]
+    h = RAAKA / "corine"
+    zip_ = h / "clc2018_fi20m.zip"
+    alku = time.time()
+    n, dt, uusi = hae(CORINE_OSOITE, zip_, kerro=False)
+    with zipfile.ZipFile(zip_) as z:
+        z.extract(CORINE_TIF, h)
+    kohde = TYO / "corine_maanpeite.tif"
+    subprocess.run(["gdal_translate", "-q", "-projwin", str(b[0]), str(b[3]), str(b[2]), str(b[1]), "-co", "COMPRESS=DEFLATE",
+                    str(h / CORINE_TIF), str(kohde)], check=True)
+    (h / CORINE_TIF).unlink(missing_ok=True)
+    zip_.unlink(missing_ok=True)
+    lokiin("corine", osoite=CORINE_OSOITE, haettu=nyt_iso(), siirretty_tavua=int(n if uusi else 0), sekuntia=round(time.time() - alku, 1),
+           hilakoko_m=20, ruovikkoluokka=CORINE_LUOKKA_RUOVIKKO, luokan_nimi="Sisämaan kosteikot vedessä (CLC 4112)")
+    loki("Corine ladattu: %.0f Mt, %.0f s" % (n / 1e6, time.time() - alku))
 
 
 # ----------------------------------------------------------------------------------------
@@ -868,6 +918,7 @@ VAIHEET = {
     "dem10": vaihe_dem10,
     "dem2": vaihe_dem2,
     "luke": vaihe_luke,
+    "corine": vaihe_corine,
     "vayla": vaihe_vayla,
     "traficom": vaihe_traficom,
     "ehdot": vaihe_ehdot,

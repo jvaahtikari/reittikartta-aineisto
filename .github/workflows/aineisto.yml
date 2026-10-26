@@ -9,7 +9,7 @@ on:
     - cron: "17 3 1 * *"   # kuukauden ensimmäinen päivä klo 03.17 UTC
 
 permissions:
-  contents: read
+  contents: write      # vain ajolokin työntämiseen haaraan ajoloki (git push --force)
   pages: write
   id-token: write
 
@@ -22,7 +22,13 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     steps:
+      - name: Ajon alkuhetki
+        id: alku
+        run: echo "s=$(date +%s)" >> "$GITHUB_OUTPUT"
+
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Asenna työkalut
         run: |
@@ -41,14 +47,60 @@ jobs:
           restore-keys: laser-laz-
 
       - name: Lataa, rakenna ja tarkista (python3 ajaa.py)
-        run: python3 ajaa.py
+        shell: bash
+        run: |
+          mkdir -p tyo
+          python3 ajaa.py 2>&1 | tee tyo/ajaa.log
 
+      # MML:n laserkeilaus tiedostopalvelun OGC API Processes -rajapinnasta. Avain on vain tämän askeleen ympäristömuuttuja (GitHubin salaisuus),
+      # eikä sitä tulosteta eikä kirjoiteta mihinkään. Ilman avainta laser.py käyttää Paitulin vuoden 2008 keilausta.
       - name: Laserkeilaus rantavyöhykkeeltä (python3 laser.py)
-        run: python3 laser.py
+        shell: bash
+        env:
+          MML_API_KEY: ${{ secrets.MML_API_KEY }}
+        run: python3 laser.py 2>&1 | tee tyo/laser.log
+
+      # Paketin tarkistus uudelleen laserosan jälkeen, koska laser.py lisää aineisto.json-tiedostoon lähteen ja tiedostot
+      - name: Paketin tarkistus laserosan jälkeen (python3 tarkista.py)
+        shell: bash
+        run: python3 tarkista.py 2>&1 | tee tyo/tarkista_laserin_jalkeen.log
+
+      - name: Maaston korkeustarkistus (python3 maastotarkistus.py)
+        if: always()
+        continue-on-error: true
+        shell: bash
+        run: python3 maastotarkistus.py 2>&1 | tee tyo/maastotarkistus.log
 
       - name: Levytila ajon jälkeen
         if: always()
         run: df -h . && du -sh tyo ulos || true
+
+      - name: Kirjoita ajon yhteenveto ja julkaise haaraan ajoloki
+        if: always()
+        shell: bash
+        env:
+          MML_API_KEY: ${{ secrets.MML_API_KEY }}      # vain yhteenvedon puhdistukseen, ei tulosteta
+          GH_TOKEN: ${{ github.token }}
+          AJO_ALKU: ${{ steps.alku.outputs.s }}
+          AJO_TILA: ${{ job.status }}
+        run: |
+          set -e
+          d="$(mktemp -d)"
+          python3 ajoloki.py "$d/ajoloki/viimeisin.md"
+          if [ -n "$MML_API_KEY" ] && grep -qF -- "$MML_API_KEY" "$d/ajoloki/viimeisin.md"; then
+            echo "Yhteenveto sisältäisi avaimen, sitä ei julkaista."
+            exit 1
+          fi
+          cp "$d/ajoloki/viimeisin.md" ulos_ajoloki_kopio.md || true
+          cd "$d"
+          git init -q -b ajoloki
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add ajoloki/viimeisin.md
+          git commit -q -m "Ajon ${GITHUB_RUN_ID} yhteenveto"
+          git remote add origin "https://github.com/${GITHUB_REPOSITORY}.git"
+          otsake="$(printf 'x-access-token:%s' "$GH_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=AUTHORIZATION: basic ${otsake}" push --force origin ajoloki
 
       - name: Tallenna lokit ja tarkistustulos
         if: always()
@@ -57,6 +109,12 @@ jobs:
           name: lokit
           path: |
             tyo/lataus_loki.json
+            tyo/*.log
+            tyo/laser/loki.json
+            tyo/laser/ruudut.json
+            tyo/maastotarkistus.json
+            tyo/puusto_tilasto.json
+            ulos_ajoloki_kopio.md
             tyo/kerrosmaarat.json
             tyo/tienimet_gdal.log
             ulos/tarkistus.json

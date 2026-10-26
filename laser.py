@@ -59,6 +59,7 @@ from shapely.ops import transform, unary_union
 from shapely.prepared import prep
 
 from asetukset import *  # noqa: F401,F403
+from mml_asiakas import LASER_PROSESSI, MmlAsiakas, MmlVirhe
 
 gdal.UseExceptions()
 ogr.UseExceptions()
@@ -95,6 +96,12 @@ POISSULKUTILAVUUDET = [
     {"nimi": "Naistenlahden voimalaitoksen höyrypilvi", "laatikko": (328350, 6823650, 328700, 6823950), "z_yli": 192.0},
 ]
 POISTETTAVAT_LUOKAT = (7, 18)  # MML:n luokat 7 (matala roska) ja 18 (korkea roska). Luokkaa 18 ei tässä aineistossa ole
+# MML:n uusi laserkeilaus (0,5 p/m2, 2020-) tiedostopalvelun OGC API Processes -rajapinnasta (vaihe 1c). Avain tulee ympäristömuuttujasta
+# MML_API_KEY (GitHubin salaisuus), eikä sitä kirjoiteta mihinkään. Ilman avainta tai jos ruutu puuttuu, käytetään Paitulin vuoden 2008 keilausta.
+MML_AVAIN_MUUTTUJA = "MML_API_KEY"
+MML_OGC_OSOITE = "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/"
+MML_AINEISTO = "Uusin"                      # dataSetInput: "Uusin", "05p_2020-" tai "05p_2008-2019"
+MML_POISTETTAVAT_LUOKAT = (7, 15, 16, 18)   # MML:n luokat: 7 matala piste, 15 ilmapiste, 16 yksittäinen piste, 18 korkea kohina
 LASER_LISENSSI = "https://creativecommons.org/licenses/by/4.0/"
 LASER_PAITULI = PAITULI + "mml/laserkeilaus/2008_latest/"
 LASER_INDEKSI = ("2008_latest.shp", "2008_latest.shx", "2008_latest.dbf", "2008_latest.prj", "2008_latest.cpg")
@@ -127,6 +134,7 @@ NAKOPISTE_ETAISYYS_M = (450, 1800)                        # etäisyys kattilarak
 LTYO = TYO / "laser"
 LRAAKA = LTYO / "raaka"
 LAZ = LRAAKA / "laz"
+LAZ_MML = LAZ / "mml"                       # MML:n ruudut (välimuistihakemiston sisällä): <ruutu>.laz ja <ruutu>.json (metatiedot)
 LPISTEET = LTYO / "pisteet"
 LKUVAT = ULOS / "tarkistuskuvat"
 LOKI = LTYO / "loki.json"
@@ -343,44 +351,238 @@ def datetime_nyt_vuosi():
     return int(time.strftime("%Y"))
 
 
+_RUUDUT_VALIMUISTI = {"mtime": None, "data": None}
+
+
 def ruudut():
-    d = lue_json(LTYO / "ruudut.json")
-    if d is None:
+    """Ruutulista ruudut.json:sta (välimuistissa tiedoston muutosajan mukaan)."""
+    polku = LTYO / "ruudut.json"
+    if not polku.exists():
         vaihe_ruudut()
-        d = lue_json(LTYO / "ruudut.json")
-    return d["ruudut"]
+    mt = polku.stat().st_mtime_ns
+    if _RUUDUT_VALIMUISTI["mtime"] != mt:
+        _RUUDUT_VALIMUISTI["data"] = lue_json(polku)["ruudut"]
+        _RUUDUT_VALIMUISTI["mtime"] = mt
+    return _RUUDUT_VALIMUISTI["data"]
+
+
+def lahde_lyhyt(r):
+    return "mml" if r.get("lahde") == "mml_tiedostopalvelu" else "2008"
+
+
+def laz_polku(r):
+    """Ruudun käytettävä LAZ-tiedosto (MML:n uusi keilaus tai Paitulin 2008)."""
+    return LAZ_MML / (r["ruutu"] + ".laz") if lahde_lyhyt(r) == "mml" else LAZ / (r["ruutu"] + ".laz")
+
+
+def npz_polku(r):
+    return LPISTEET / ("%s_%s.npz" % (r["ruutu"], lahde_lyhyt(r)))
+
+
+def ruutu_nimella(nimi):
+    for r in ruudut():
+        if r["ruutu"] == nimi:
+            return r
+    raise KeyError(nimi)
+
+
+def keilausvuodet():
+    return sorted({r["vuosi"] for r in ruudut() if r.get("vuosi")})
+
+
+def laser_lahdemerkinta():
+    """Lähdemerkintä käytettyjen ruutujen keilausvuosien mukaan (vuosi/vuosi, jos lähteitä on useita)."""
+    return "Sisältää Maanmittauslaitoksen laserkeilausaineistoa %s (CC BY 4.0)" % "/".join(str(v) for v in keilausvuodet())
+
+
+def keilausselite():
+    """Lyhyt kuvaus käytetystä keilauksesta: 'MML 2023' tai 'MML 2023, osin Paituli 2008'."""
+    rs = ruudut()
+    mml = sorted({r["vuosi"] for r in rs if r.get("lahde") == "mml_tiedostopalvelu" and r.get("vuosi")})
+    vara = [r for r in rs if r.get("lahde") != "mml_tiedostopalvelu"]
+    osat = []
+    if mml:
+        osat.append("MML:n uusi keilaus %s" % "/".join(str(v) for v in mml))
+    if vara:
+        osat.append(("ruudut %s: Paitulin keilaus 2008" % ", ".join(r["ruutu"] for r in vara)) if mml else "Paitulin keilaus 2008")
+    return ", ".join(osat)
+
+
+def laz_kelvollinen(polku):
+    """Onko LAZ-tiedosto avattavissa ja onko siinä pisteitä (laspy lukee vain otsakkeen)."""
+    try:
+        import laspy
+        with laspy.open(str(polku)) as f:
+            return f.header.point_count > 0
+    except Exception:  # noqa: BLE001
+        return False
+
+
+def hae_mml_ruudut(lista):
+    """Hakee MML:n uuden keilauksen ruudut tiedostopalvelun OGC API Processes -rajapinnasta (yksi työ kaikille ruuduille).
+
+    Palauttaa (ruutu -> tiedot, yhteenveto). Ei nosta virhettä: jos avainta ei ole tai haku epäonnistuu, palautetaan tyhjä tulos
+    (tai välimuistissa jo olevat ruudut), ja kutsuja käyttää 2008-aineistoa varalähteenä. Ruudut tallennetaan hakemistoon tyo/laser/raaka/laz/mml/
+    (välimuistihakemiston sisällä), ja jokaisen vieressä on <ruutu>.json, jossa on tulosvastauksen metatiedot ja muokkausaika. Tiedosto ladataan
+    uudelleen vain, jos se puuttuu, koko poikkeaa tai MML:n lastModified on muuttunut.
+    """
+    from concurrent.futures import ThreadPoolExecutor
+    avain = os.environ.get(MML_AVAIN_MUUTTUJA, "").strip()
+    yht = {"avain_asetettu": bool(avain), "aineisto": MML_AINEISTO, "prosessi": LASER_PROSESSI, "pyydetty_ruutuja": len(lista)}
+    tulos = {}
+    t0 = time.time()
+
+    def lue_valimuisti(nimi):
+        p, j = LAZ_MML / (nimi + ".laz"), LAZ_MML / (nimi + ".json")
+        if p.exists() and j.exists() and laz_kelvollinen(p):
+            d = lue_json(j) or {}
+            d["tavua"] = p.stat().st_size
+            return d
+        return None
+
+    if not avain:
+        loki("VAROITUS: %s puuttuu, MML:n uutta keilausta ei haeta. Käytetään välimuistissa olevia MML-ruutuja, muuten vuoden 2008 keilausta (Paituli)." % MML_AVAIN_MUUTTUJA)
+        yht["tila"] = "ei avainta"
+        for r in lista:
+            d = lue_valimuisti(r["ruutu"])
+            if d:
+                tulos[r["ruutu"]] = d
+        yht["valimuistista_ruutuja"] = len(tulos)
+        return tulos, yht
+    asiakas = MmlAsiakas(avain, loki=loki)
+    try:
+        ids = asiakas.yhteys()
+        if LASER_PROSESSI not in ids:
+            raise MmlVirhe("prosessia %s ei ole prosessiluettelossa" % LASER_PROSESSI)
+        yht["tunnistus"] = asiakas.tunnistus
+        nimet = [r["ruutu"] for r in lista]
+        job, vast = asiakas.kaynnista(nimet, aineisto=MML_AINEISTO)
+        yht["tyon_tunnus"] = job
+        lop = asiakas.odota(job, enint_s=1200, vali_s=4, kerro=lambda j, st, pr, dt: loki("MML-työ %s: %s %s %% (%.0f s)" % (j[:8], st, pr, dt)))
+        yht["tyon_tila"] = lop.get("status")
+        yht["tyon_viesti"] = lop.get("message") or lop.get("statusMessage")
+        if lop.get("status") != "successful":
+            raise MmlVirhe("työ päättyi tilaan %s: %s" % (lop.get("status"), asiakas.siivoa_teksti(json.dumps(lop)[:300])))
+        tul = asiakas.tulokset(job)
+        tied = [t for t in asiakas.tiedostot(tul) if t["nimi"].lower().endswith(".laz")]
+        yht["tuloksessa_ruutuja"] = len(tied)
+        loki("MML: työ onnistui, tuloksessa %d / %d ruutua (%s)" % (len(tied), len(nimet), yht["tyon_viesti"]))
+        pyydetyt = set(nimet)
+        tied = [t for t in tied if t["lehti"] in pyydetyt]
+        LAZ_MML.mkdir(parents=True, exist_ok=True)
+
+        def kasittele(t):
+            nimi = t["lehti"]
+            p, j = LAZ_MML / (nimi + ".laz"), LAZ_MML / (nimi + ".json")
+            meta = t.get("meta") or {}
+            try:
+                pituus = int(t["length"]) if t.get("length") else None
+            except (TypeError, ValueError):
+                pituus = None
+            vanha = lue_json(j) if j.exists() else None
+            sama = (p.exists() and vanha and vanha.get("lastModified") == meta.get("lastModified") and
+                    (pituus is None or p.stat().st_size == pituus) and laz_kelvollinen(p))
+            ladattu = 0
+            if not sama:
+                try:
+                    ladattu = asiakas.lataa(t["path"], p)
+                except MmlVirhe as e:
+                    loki("VAROITUS: ruudun %s lataus epäonnistui (%s), käytetään 2008-aineistoa" % (nimi, str(e)[:200]))
+                    return nimi, None
+                if not laz_kelvollinen(p):
+                    loki("VAROITUS: ladattu ruutu %s ei aukea, käytetään 2008-aineistoa" % nimi)
+                    p.unlink(missing_ok=True)
+                    return nimi, None
+                kirjoita_json(j, {"lastModified": meta.get("lastModified"), "meta": meta, "haettu": nyt_iso(), "url": asiakas.siivoa_teksti(t["path"])})
+            else:
+                loki("MML-ruutu %s: välimuistissa, ei ladata" % nimi)
+            d = lue_json(j) or {}
+            d["tavua"] = p.stat().st_size
+            d["ladattu_nyt_tavua"] = ladattu
+            return nimi, d
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            for nimi, d in ex.map(kasittele, tied):
+                if d:
+                    tulos[nimi] = d
+        yht["tila"] = "ok"
+    except (MmlVirhe, OSError, ValueError, KeyError) as e:
+        yht["tila"] = "virhe"
+        yht["virhe"] = asiakas.siivoa_teksti(str(e))[:400]
+        loki("VAROITUS: MML-haku epäonnistui (%s). Käytetään välimuistin MML-ruutuja ja muuten 2008-aineistoa." % yht["virhe"])
+        for r in lista:
+            if r["ruutu"] not in tulos:
+                d = lue_valimuisti(r["ruutu"])
+                if d:
+                    tulos[r["ruutu"]] = d
+        yht["valimuistista_ruutuja"] = len(tulos)
+    yht["pyyntoja"] = asiakas.pyyntoja
+    yht["sekuntia"] = round(time.time() - t0, 1)
+    yht["ladattu_nyt_tavua"] = int(sum(d.get("ladattu_nyt_tavua", 0) for d in tulos.values()))
+    return tulos, yht
 
 
 def vaihe_lataa():
     t0 = time.time()
     lista = ruudut()
-    tavuja = 0
-    ladattu = 0
+    mml, mml_yht = hae_mml_ruudut(lista)
+    tavuja = int(mml_yht.get("ladattu_nyt_tavua", 0))
+    ladattu = sum(1 for d in mml.values() if d.get("ladattu_nyt_tavua"))
     rivit = []
     for r in lista:
-        for pääte in ("laz", "csv"):
-            url = PAITULI + r["polku"][:-3] + pääte
-            kohde = LAZ / (r["ruutu"] + "." + pääte)
-            n, dt, uusi = hae(url, kohde, kerro=(pääte == "laz"))
-            if uusi:
-                tavuja += n
-                ladattu += 1
-            if pääte == "laz":
-                r["koko_tavua"] = n
-                r["url"] = url
-            else:
-                r["metatiedot"] = lue_metatiedot(kohde)
+        d = mml.get(r["ruutu"])
+        if d:
+            meta = d.get("meta") or {}
+            vuosi = None
+            for kentta in (meta.get("yearOfScanning"), (meta.get("dateOfScanning") or "")[:4], (meta.get("lastModified") or "")[:4]):
+                if kentta and str(kentta).isdigit():
+                    vuosi = int(kentta)
+                    break
+            r.update(lahde="mml_tiedostopalvelu", vuosi=vuosi, koko_tavua=d["tavua"], url=asiakas_osoite(d), mml_meta=meta,
+                     metatiedot={"Keilauspaivamaara": meta.get("dateOfScanning"), "Pistetiheys": meta.get("pointDensity"),
+                                 "Korkeustarkkuus": meta.get("elevationPrecision"), "Keilain": meta.get("scanner"),
+                                 "Projekti(t)": meta.get("project"), "Pistepilvitunnus": meta.get("pointCloudID"),
+                                 "Aineistoversio": meta.get("datasetVersion"), "Muokattu": meta.get("lastModified")})
+            # Varalähteen vanha 2008-tiedosto ei ole enää tarpeen: se poistetaan, ettei välimuisti kasva turhaan
+            for pääte in ("laz", "csv"):
+                (LAZ / (r["ruutu"] + "." + pääte)).unlink(missing_ok=True)
+        else:
+            r.pop("mml_meta", None)
+            r["lahde"] = "paituli_2008"
+            r["vuosi"] = 2008
+            for pääte in ("laz", "csv"):
+                url = PAITULI + r["polku"][:-3] + pääte
+                kohde = LAZ / (r["ruutu"] + "." + pääte)
+                n, dt, uusi = hae(url, kohde, kerro=(pääte == "laz"))
+                if uusi:
+                    tavuja += n
+                    ladattu += 1
+                if pääte == "laz":
+                    r["koko_tavua"] = n
+                    r["url"] = url
+                else:
+                    r["metatiedot"] = lue_metatiedot(kohde)
         rivit.append(r)
+    mml_yht["ruutuja_mml"] = sum(1 for r in rivit if r["lahde"] == "mml_tiedostopalvelu")
+    mml_yht["ruutuja_2008_varalla"] = [r["ruutu"] for r in rivit if r["lahde"] != "mml_tiedostopalvelu"]
+    mml_yht["vuodet"] = sorted({r["vuosi"] for r in rivit if r["lahde"] == "mml_tiedostopalvelu" and r["vuosi"]})
     d = lue_json(LTYO / "ruudut.json")
     d["ruudut"] = rivit
+    d["yhteenveto"]["mml_haku"] = mml_yht
+    d["yhteenveto"]["vuodet"] = sorted({r["vuosi"] for r in rivit if r.get("vuosi")})
     kirjoita_json(LTYO / "ruudut.json", d)
     siirto = loki_lue().get("lataus", {"tavua": 0, "sekuntia": 0.0})
     siirto["tavua"] += tavuja
     siirto["sekuntia"] = round(siirto["sekuntia"] + time.time() - t0, 1)
     siirto["tiedostoja_ladattu_nyt"] = ladattu
     loki_kirjoita("lataus", siirto)
-    loki("lataus: %d tiedostoa tällä kertaa, %.1f Mt tällä kertaa, yhteensä %.1f Mt, %.0f s" % (
-        ladattu, tavuja / 1e6, siirto["tavua"] / 1e6, time.time() - t0))
+    loki_kirjoita("mml_haku", mml_yht)
+    loki("lataus: MML-ruutuja %d, 2008-varalla %d (%s), tällä kertaa %d tiedostoa, %.1f Mt, %.0f s" % (
+        mml_yht["ruutuja_mml"], len(mml_yht["ruutuja_2008_varalla"]), ", ".join(mml_yht["ruutuja_2008_varalla"]) or "-", ladattu, tavuja / 1e6, time.time() - t0))
+
+
+def asiakas_osoite(d):
+    """MML-ruudun lataus-URL (sivutiedostosta, ilman avainta)."""
+    return d.get("url") or "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/"
 
 
 def lue_metatiedot(polku):
@@ -491,20 +693,23 @@ def vaihe_pisteet():
     t0 = time.time()
     rd, a = ruudukko()
     dem, _ = dem1()
+    vesi = rd.piirra(a["vesi_g"])
     lista = ruudut()
     LPISTEET.mkdir(parents=True, exist_ok=True)
     reuna = 60.0
-    yhteensa = {"luettu": 0, "luokka7": 0, "alueen_ulkopuolella": 0, "kohinaksi": 0, "pilvea": 0, "tallennettu": 0}
     tilasto = loki_lue().get("pisteet", {})
     for r in lista:
-        ulos = LPISTEET / (r["ruutu"] + ".npz")
+        ulos = npz_polku(r)
         if tuore(ulos):
             continue
         t = time.time()
-        x, y, z, c, rn, nr = lue_ruutu_raaka(LAZ / (r["ruutu"] + ".laz"))
+        mml = lahde_lyhyt(r) == "mml"
+        poistettavat = MML_POISTETTAVAT_LUOKAT if mml else POISTETTAVAT_LUOKAT
+        x, y, z, c, rn, nr = lue_ruutu_raaka(laz_polku(r))
         n0 = len(x)
-        ok = ~np.isin(c, POISTETTAVAT_LUOKAT)
+        ok = ~np.isin(c, poistettavat)
         n_l7 = int((~ok).sum())
+        luokat_ennen = {int(k): int(v) for k, v in zip(*np.unique(c, return_counts=True))}
         ok &= (x >= rd.e0 - reuna) & (x < rd.e1 + reuna) & (y >= rd.n0 - reuna) & (y < rd.n1 + reuna)
         n_ulko = int(n0 - n_l7 - ok.sum())
         x, y, z, c, rn, nr = x[ok], y[ok], z[ok], c[ok], rn[ok], nr[ok]
@@ -521,29 +726,51 @@ def vaihe_pisteet():
         n_kohina = int((~hyv).sum())
         x, y, z, c, rn, nr, dz = x[hyv], y[hyv], z[hyv], c[hyv], rn[hyv], nr[hyv], dz[hyv]
         pil = pilvisuodatus(x, y, z, dz)
-        for tv in POISSULKUTILAVUUDET:
-            te0, tn0, te1, tn1 = tv["laatikko"]
-            pil &= ~((x >= te0) & (x < te1) & (y >= tn0) & (y < tn1) & (z > tv["z_yli"]))
+        if not mml:
+            # Käsin rajatut poissulkutilavuudet kuvaavat vuoden 2008 keilauksen höyrypilveä, eivät uutta keilausta
+            for tv in POISSULKUTILAVUUDET:
+                te0, tn0, te1, tn1 = tv["laatikko"]
+                pil &= ~((x >= te0) & (x < te1) & (y >= tn0) & (y < tn1) & (z > tv["z_yli"]))
         n_pilvi = int((~pil).sum())
         x, y, z, c, rn, nr = x[pil], y[pil], z[pil], c[pil], rn[pil], nr[pil]
+        # Tiheys ruudun ja laskentaruudukon leikkauksessa (kaikki ruudut ja vain maaruudut)
+        tl = r["laatikko"]
+        e0, e1 = max(tl[0], rd.e0), min(tl[2], rd.e1)
+        n0_, n1_ = max(tl[1], rd.n0), min(tl[3], rd.n1)
+        tiheys = {}
+        if e1 > e0 and n1_ > n0_:
+            inb = (x >= e0) & (x < e1) & (y >= n0_) & (y < n1_)
+            jj = np.clip(rd.sarake(x[inb]), 0, rd.w - 1)
+            ii = np.clip(rd.rivi(y[inb]), 0, rd.h - 1)
+            maalla = ~vesi[ii, jj]
+            j0, j1 = int(round(e0 - rd.e0)), int(round(e1 - rd.e0))
+            i0, i1 = int(round(rd.n1 - n1_)), int(round(rd.n1 - n0_))
+            maa_ala = float((~vesi[i0:i1, j0:j1]).sum()) * rd.res * rd.res
+            ala = (e1 - e0) * (n1_ - n0_)
+            tiheys = {"ala_km2": round(ala / 1e6, 3), "maa_km2": round(maa_ala / 1e6, 3), "pisteita_alueella": int(inb.sum()),
+                      "pisteita_maalla": int(maalla.sum()), "tiheys_p_m2": round(float(inb.sum()) / ala, 3),
+                      "tiheys_maalla_p_m2": round(float(maalla.sum()) / maa_ala, 3) if maa_ala > 0 else None}
         np.savez(ulos, x=np.round((x - rd.e0) * 100).astype(np.int32), y=np.round((y - rd.n0) * 100).astype(np.int32),
                  z=np.round(z * 100).astype(np.int32), c=c, rn=rn, nr=nr)
-        yhteensa["luettu"] += n0
-        yhteensa["luokka7"] += n_l7
-        yhteensa["alueen_ulkopuolella"] += n_ulko
-        yhteensa["kohinaksi"] += n_kohina
-        yhteensa["pilvea"] += n_pilvi
-        yhteensa["tallennettu"] += int(len(x))
-        tilasto[r["ruutu"]] = {"luettu": int(n0), "luokka7": n_l7, "alueen_ulkopuolella": n_ulko, "kohinaksi": n_kohina, "pilvea": n_pilvi,
-                               "tallennettu": int(len(x)), "sekuntia": round(time.time() - t, 1)}
-        loki("pisteet %s: luettu %d, luokka 7: %d, ulkopuolella %d, kohinaksi %d, pilvi %d, tallennettu %d (%.1f s)" % (
-            r["ruutu"], n0, n_l7, n_ulko, n_kohina, n_pilvi, len(x), time.time() - t))
+        tilasto[r["ruutu"]] = dict({"lahde": r.get("lahde"), "vuosi": r.get("vuosi"), "luettu": int(n0), "poistettu_luokilla": n_l7,
+                                    "poistetut_luokat": list(poistettavat), "luokat_ennen": luokat_ennen, "luokka7": n_l7,
+                                    "alueen_ulkopuolella": n_ulko, "kohinaksi": n_kohina, "pilvea": n_pilvi,
+                                    "tallennettu": int(len(x)), "sekuntia": round(time.time() - t, 1)}, **tiheys)
+        loki("pisteet %s (%s %s): luettu %d, poistettu luokilla %s %d, ulkopuolella %d, kohinaksi %d, pilvi %d, tallennettu %d, tiheys %s (%.1f s)" % (
+            r["ruutu"], r.get("lahde"), r.get("vuosi"), n0, list(poistettavat), n_l7, n_ulko, n_kohina, n_pilvi, len(x),
+            tiheys.get("tiheys_p_m2"), time.time() - t))
         loki_kirjoita("pisteet", tilasto)
-    loki("pisteet valmis (%.0f s)" % (time.time() - t0))
+    yht = {"ruutuja": len(tilasto), "luettu": sum(v["luettu"] for v in tilasto.values()), "tallennettu": sum(v["tallennettu"] for v in tilasto.values()),
+           "pisteita_alueella": sum(v.get("pisteita_alueella", 0) for v in tilasto.values()), "pisteita_maalla": sum(v.get("pisteita_maalla", 0) for v in tilasto.values()),
+           "ala_km2": round(sum(v.get("ala_km2", 0) for v in tilasto.values()), 2), "maa_km2": round(sum(v.get("maa_km2", 0) for v in tilasto.values()), 2)}
+    yht["tiheys_p_m2"] = round(yht["pisteita_alueella"] / (yht["ala_km2"] * 1e6), 3) if yht["ala_km2"] else None
+    yht["tiheys_maalla_p_m2"] = round(yht["pisteita_maalla"] / (yht["maa_km2"] * 1e6), 3) if yht["maa_km2"] else None
+    loki_kirjoita("pisteet_yhteensa", yht)
+    loki("pisteet valmis (%.0f s): %s" % (time.time() - t0, yht))
 
 
 def pisteet_ruudulle(nimi):
-    d = np.load(LPISTEET / (nimi + ".npz"))
+    d = np.load(npz_polku(ruutu_nimella(nimi)))
     return d["x"], d["y"], d["z"], d["c"], d["rn"], d["nr"]
 
 
@@ -755,10 +982,10 @@ def vaihe_rakennukset():
         "kentat": {"z_maa": "maanpinta N2000, DEM:n mediaani polygonin reunalla (m)",
                    "h_max": "korkein piste polygonissa miinus z_maa (m)", "h_p90": "90. persentiili korkeuksista miinus z_maa (m)",
                    "h_med": "mediaani miinus z_maa (m)", "pisteita": "pisteiden määrä polygonissa (kohinasuodatuksen jälkeen)",
-                   "ala_m2": "polygonin pinta-ala", "epavarma": "1 = vähintään 150 m² ja korkein piste alle 3 m: rakennus on todennäköisesti rakennettu keilauksen (2008) jälkeen",
+                   "ala_m2": "polygonin pinta-ala", "epavarma": "1 = vähintään 150 m² ja korkein piste alle 3 m: rakennus on todennäköisesti rakennettu keilauksen jälkeen",
                    "ei_keilattu": "1 = pisteitä alle 5 tai h_max alle 2 m: rakennusta ei ollut keilaushetkellä (tai se on matala katos). Älä käytä h_p90:tä korkeutena.",
                    "keilausvuosi": "sen laserruudun keilausvuosi, jonka alueella rakennuksen keskipiste on"},
-        "huomio": "Korkeudet ovat laserkeilauksen ajalta (ks. aineisto_1b.json, keilaus 2008). Sen jälkeen rakennetuilla rakennuksilla "
+        "huomio": "Korkeudet ovat laserkeilauksen ajalta (ks. aineisto_1b.json; käytetty keilaus: " + keilausselite() + "). Sen jälkeen rakennetuilla rakennuksilla "
                   "h_p90 kuvaa tonttia tai kasvillisuutta, ei rakennusta.",
         "yhteenveto": yht, "rakennukset": tulos}, kompakti=True)
     kirjoita_json(LTYO / "rakennukset_tilasto.json", yht)
@@ -997,7 +1224,7 @@ def mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit):
                 avattu.append(q)
     hallit = sorted(avattu, key=lambda q: -q.area)
     tulos = {"tunnus": "naistenlahden_voimalaitos", "nimi": "Naistenlahden voimalaitos", "tyyppi": "voimalaitos",
-             "huomio": "Keilaus on huhtikuulta 2008. Laitoksen laajennukset ja uudet piiput sen jälkeen eivät näy aineistossa."}
+             "huomio": "Keilaus: " + keilausselite() + ". Laitoksen sen jälkeen tehdyt laajennukset ja uudet piiput eivät näy aineistossa."}
     rakennukset = []
     for g in hallit[:3]:
         m = rd2.piirra(g)
@@ -1153,8 +1380,12 @@ def vaihe_maamerkit():
     kapeat = korkeat_kapeat(rd, dem)
     loki("maamerkit: %d korkeaa kapeaa rakennetta vyöhykkeellä, korkein %.1f m" % (len(kapeat), kapeat[0]["h_maasta"] if kapeat else 0))
     maamerkit = []
-    maamerkit.append(mittaa_nasinneula(rd, dem, kapeat))
-    maamerkit.append(mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit))
+    for nimi_, fn_ in (("nasinneula", lambda: mittaa_nasinneula(rd, dem, kapeat)), ("naistenlahden_voimalaitos", lambda: mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit))):
+        try:
+            maamerkit.append(fn_())
+        except Exception as e:  # noqa: BLE001
+            loki("VAROITUS: maamerkin %s mittaus epäonnistui: %s" % (nimi_, repr(e)[:300]))
+            maamerkit.append({"tunnus_puuttuu": nimi_, "virhe": repr(e)[:300]})
     # Tampellan tehdasrakennukset: Tampellan alueen katujen osoitteiden ympäristön suuret rakennukset
     osoitteet = lue_osoitepisteet(a["vyohyke_g"], TAMPELLA_KADUT)
     if osoitteet:
@@ -1174,7 +1405,7 @@ def vaihe_maamerkit():
                           "rakennukset": tamp[:25], "rakennuksia_rajauksessa": len(tamp),
                           "korkea_piippu_lahella": [{"sijainti": piste_ominaisuudet(k["e"], k["n"]), "korkeus_maasta_m": k["h_maasta"],
                                                       "z_huippu_n2000_m": k["z_huippu"], "pistepilven_todiste": k.get("pistepilven_todiste")} for k in piippu],
-                          "huomio": "Ranta-Tampellan uudet kerrostalot rakennettiin vuoden 2016 jälkeen (YIT), joten ne eivät näy vuoden 2008 keilauksessa. "
+                          "huomio": "Ranta-Tampellan uudet kerrostalot rakennettiin vuoden 2016 jälkeen (YIT), joten ne eivät näy vuoden 2008 keilauksessa (käytetty keilaus: " + keilausselite() + "). "
                                     "Korkea piippu on keilauksessa tosi rakenne, ei harhapiste: siitä on yhtenäinen pistejono maasta huippuun (ks. pistepilven_todiste). "
                                     "Se näkyy siluettikuvassa suunnassa noin 172 astetta yli 10 asteen korkeuskulmassa."})
     # Särkänniemen korkeimmat laitteet: tiiviit korkeat ryhmät rakennusten ulkopuolella
@@ -1199,7 +1430,7 @@ def vaihe_maamerkit():
                       "rajaus": "Särkänniemen laatikko %s: tiiviit (enintään 16 m:n laajuiset) pistejoukot, joissa on vähintään 8 pistettä yli 15 m maan yläpuolella, "
                                 "rakennusten (2 m:n puskuri) ja Näsinneulan (45 m) ulkopuolella." % (SARKANNIEMI_LAATIKKO,),
                       "laitteet": ehdokkaat[:8],
-                      "huomio": "Pistepilvi ei kerro, onko kohde huvipuiston laite, mastotyyppinen rakenne vai tiheä puuryhmä. Laitteita ei ole tunnistettu nimeltä, ja vuoden 2008 laitteisto on voinut muuttua."})
+                      "huomio": "Pistepilvi ei kerro, onko kohde huvipuiston laite, mastotyyppinen rakenne vai tiheä puuryhmä. Laitteita ei ole tunnistettu nimeltä, ja laitteisto on voinut muuttua keilauksen jälkeen."})
     # Mustalahden satama: rakennukset laatikossa, enintään MUSTALAHTI_VESIETAISYYS_M m:n päässä vesialueesta
     vesi = a["vesi_g"]
     mus = []
@@ -1212,7 +1443,7 @@ def vaihe_maamerkit():
                       "rajaus": "Laatikko %s: Maastotietokannan rakennukset (vähintään 60 m²), enintään %.0f m:n päässä vesialueesta." % (MUSTALAHTI_LAATIKKO, MUSTALAHTI_VESIETAISYYS_M),
                       "rakennukset": mus[:30], "rakennuksia_rajauksessa": len(mus)})
     kirjoita_json(LTYO / "maamerkit.json", {
-        "lahde": "Sisältää Maanmittauslaitoksen laserkeilausaineistoa 2008 (CC BY 4.0). Keilaus 18.4.2008 (lehti M421).",
+        "lahde": laser_lahdemerkinta() + ". Käytetty keilaus: " + keilausselite() + ".",
         "koordinaatistot": "EPSG:3067 (E, N metreinä) ja EPSG:4326 (lon, lat). Korkeudet metreinä, N2000. 'maasta' on korkeus maanpinnasta.",
         "maamerkit": maamerkit,
         "korkeat_kapeat_rakenteet_vyohykkeella": kapeat[:30]})
@@ -1383,8 +1614,8 @@ def vaihe_tiilet(kvantti=None):
     meta = {"name": "Nasijarven rantavyohykkeen pintamalli", "format": "png", "type": "overlay", "encoding": "mapbox",
             "description": "Terrain-RGB (Mapbox), pintamalli (DSM). korkeus_m = -10000 + (R*65536 + G*256 + B) * 0,1. RGB (0,0,0) = ei dataa. "
                            "Korkeusjarjestelma N2000. Puuttuva tiili = pelkkaa vesialuetta (jarven pinta %.2f m) tai alueen ulkopuolta. "
-                           "Laserkeilaus 18.4.2008, joten sen jalkeen rakennettu ei nay. Zoom 16: bilineaarinen, zoom 12-15: alueen maksimi (siluetit sailyvat)." % taso,
-            "attribution": "Sisältää Maanmittauslaitoksen laserkeilausaineistoa 2008 (CC BY 4.0)", "tile_size": 256, "quantization_m": kvantti,
+                           "Laserkeilaus: %s, joten sen jalkeen rakennettu ei nay. Zoom 16: bilineaarinen, zoom 12-15: alueen maksimi (siluetit sailyvat)." % (taso, keilausselite()),
+            "attribution": laser_lahdemerkinta(), "tile_size": 256, "quantization_m": kvantti,
             "lake_level_m": taso}
     polku = LTYO / "pinta.pmtiles"
     n, koko, koot = pmtiles_kirjoita(polku, tiilet, tuota, meta, ZOOM_MIN, ZOOM_MAX, b4326,
@@ -1847,7 +2078,7 @@ def tarkista_rakennukset(a, rak):
         "joista_ala_vahintaan_150_m2": len(isot), "kayttotarkoitus": kayttoja, "keilausvuodet": sorted({r.get("keilausvuosi") for r in kaikki if r.get("keilausvuosi")}),
         "suurimmat": [{"fid": int(f), "e": r["e"], "n": r["n"], "ala_m2": r["ala_m2"], "kaytto": r["kaytto"], "krs": r["krs"], "pisteita": r["pisteita"],
                        "h_max": r.get("h_max")} for f, r in isot[:25]],
-        "huomio": "Näille rakennuksille ei pidä käyttää h_p90:tä korkeutena. Joukossa on keilauksen (2008) jälkeen rakennettuja taloja (esimerkiksi Ranta-Tampella ja Naistenlahden voimalaitoksen "
+        "huomio": "Näille rakennuksille ei pidä käyttää h_p90:tä korkeutena. Joukossa on keilauksen jälkeen rakennettuja taloja (esimerkiksi Ranta-Tampella ja Naistenlahden voimalaitoksen "
                   "mahdolliset laajennukset) sekä matalia katoksia ja varastoja."}
     # B. Vertailuotos kerrostaloista ja pientaloista alueilta, joilla rakennus oli keilaushetkellä paikallaan (ei epävarma)
     rng = np.random.default_rng(TARKISTUS_SIEMEN + 1)
@@ -1872,71 +2103,168 @@ def tarkista_rakennukset(a, rak):
     return tulos
 
 
+HARJU_LAATIKKO = (322000, 6822100, 326200, 6823500)     # Pispalanharju
+RANTA_TAMPELLAN_TALO_FID = 11060                      # Ranta-Tampellan kerrostalo, jota ei ollut vuoden 2008 keilauksessa
+
+
+def tarkistuskohteet(rd, dem, rak, M):
+    """Viisi tarkistuskohdetta vanhalla (2008) ja uudella korkeudella (vaihe 1c, kohta 2.2)."""
+    ver = lue_json(Path(__file__).with_name("vertailu_2008.json"), {}).get("kohteet", {})
+    rk = lue_json(LTYO / "rakennuskorkeudet.json")["rakennukset"]
+    t = {"vertailukeilaus": "2008 (Paituli), arvot tiedostosta vertailu_2008.json", "nykyinen_keilaus": keilausselite(), "kohteet": {}}
+
+    def kirjaa(nimi, fn):
+        try:
+            t["kohteet"][nimi] = fn()
+        except Exception as e:  # noqa: BLE001
+            t["kohteet"][nimi] = {"virhe": repr(e)[:300]}
+            loki("VAROITUS: tarkistuskohde %s epäonnistui: %s" % (nimi, repr(e)[:300]))
+
+    def nasinneula():
+        nn = M["nasinneula"]["mitat"]["korkein_havaittu_piste"]
+        h = nn["h_maasta_m"]
+        return {"vanha_h_maasta_m": ver.get("nasinneula", {}).get("h_maasta_m"), "uusi_h_maasta_m": h, "uusi_z_n2000_m": nn["z_n2000_m"], "mastopisteita": nn["mastopisteita"],
+                "tavoite_m": [165, 171], "tavoite_lahde": "Wikipedia (Näsinneula): tornin korkeus 168 m", "hyvaksytty": bool(165 <= h <= 171)}
+
+    def piippu():
+        p = M["tampellan_tehdasrakennukset"]["korkea_piippu_lahella"][0]
+        return {"vanha_h_maasta_m": ver.get("tampellan_piippu", {}).get("h_maasta_m"), "uusi_h_maasta_m": p["korkeus_maasta_m"], "uusi_z_n2000_m": p["z_huippu_n2000_m"],
+                "tavoite_m": "noin 100", "hyvaksytty": bool(90 <= p["korkeus_maasta_m"] <= 110)}
+
+    def paarakennus():
+        kb = M["naistenlahden_voimalaitos"]["kattilarakennus"]
+        v = ver.get("voimalaitoksen_paarakennus", {})
+        return {"vanha_h_p95_m": v.get("h_p95_m"), "vanha_h_max_m": v.get("h_max_m"), "uusi_h_p95_m": kb["korkeus_p95_maasta_m"], "uusi_h_max_m": kb["korkeus_max_maasta_m"],
+                "ala_m2": kb["ääriviiva"]["ala_m2"], "hyvaksytty": bool(kb["korkeus_p95_maasta_m"] > 5)}
+
+    def talo():
+        r = rk.get(str(RANTA_TAMPELLAN_TALO_FID))
+        v = ver.get("ranta_tampellan_talo", {})
+        if r is None:
+            return {"fid": RANTA_TAMPELLAN_TALO_FID, "virhe": "rakennusta ei rakennuskorkeudet.json:ssa"}
+        return {"fid": RANTA_TAMPELLAN_TALO_FID, "vanha_h_p90_m": v.get("h_p90_m"), "vanha_h_max_m": v.get("h_max_m"), "uusi_h_p90_m": r.get("h_p90"), "uusi_h_max_m": r.get("h_max"),
+                "pisteita": r.get("pisteita"), "ei_keilattu": r.get("ei_keilattu", 0), "epavarma": r.get("epavarma", 0), "ala_m2": r.get("ala_m2"), "krs": r.get("krs"),
+                "korkeus_saatu": bool("h_p90" in r and not r.get("ei_keilattu")), "hyvaksytty": bool("h_p90" in r and not r.get("ei_keilattu") and r["h_p90"] >= 9.0)}
+
+    def harju():
+        P = pisteet_ikkuna(rd, dem, *HARJU_LAATIKKO)
+        m2 = P[P[:, 4] == 2]
+        i = int(np.argmax(m2[:, 2]))
+        v = ver.get("pispalanharju", {})
+        e0_, n0_, e1_, n1_ = HARJU_LAATIKKO
+        dm = dem[np.clip(rd.rivi(n1_ - 1.0), 0, rd.h - 1):np.clip(rd.rivi(n0_), 0, rd.h - 1) + 1, np.clip(rd.sarake(e0_), 0, rd.w - 1):np.clip(rd.sarake(e1_ - 1.0), 0, rd.w - 1) + 1]
+        return {"vanha_maanpinta_max_z_n2000_m": v.get("maanpinta_max_z_n2000_m"), "uusi_maanpinta_max_z_n2000_m": round(float(m2[i, 2]), 1),
+                "uusi_e": round(float(m2[i, 0]), 1), "uusi_n": round(float(m2[i, 1]), 1), "maapisteita_laatikossa": int(len(m2)),
+                "dem_2m_max_z_n2000_m": round(float(np.nanmax(dm)), 1), "laatikko_epsg3067": list(HARJU_LAATIKKO),
+                "hyvaksytty": bool(abs(float(m2[i, 2]) - float(np.nanmax(dm))) < 3.0)}
+    for nimi, fn_ in (("nasinneula", nasinneula), ("tampellan_piippu", piippu), ("voimalaitoksen_paarakennus", paarakennus), ("ranta_tampellan_talo", talo), ("pispalanharju_maanpinta", harju)):
+        kirjaa(nimi, fn_)
+    t["hyvaksytty"] = bool(all(v_.get("hyvaksytty", False) for v_ in t["kohteet"].values()))
+    return t
+
+
 def vaihe_tarkista():
     t0 = time.time()
     rd, a = ruudukko()
     dem, _ = dem1()
     pinta = lue_tif(LTYO / "pinta_1m.tif")
     rak = lue_rakennukset(a["vyohyke_g"])
-    M = {m["tunnus"]: m for m in lue_json(LTYO / "maamerkit.json")["maamerkit"]}
+    M = {m["tunnus"]: m for m in lue_json(LTYO / "maamerkit.json")["maamerkit"] if "tunnus" in m}
     k = {}
     # 1. Näsinneula
-    nn = M["nasinneula"]["mitat"]
-    hav = nn["korkein_havaittu_piste"]["h_maasta_m"]
-    k["1_nasinneula"] = {"korkein_havaittu_maasta_m": hav, "korkein_havaittu_z_n2000_m": nn["korkein_havaittu_piste"]["z_n2000_m"],
-                         "mastopisteita": nn["korkein_havaittu_piste"]["mastopisteita"], "tavoite_m": [165, 171],
-                         "lautasen_ulkoreuna_maasta_m": nn["lautanen"]["katon_ulkoreunan_korkeus_maasta_m"], "lautasen_halkaisija_m": nn["lautanen"]["halkaisija_m"],
-                         "varren_halkaisija_m": nn["varsi"]["halkaisija_m"],
-                         "arvio_huipun_korkeudesta_maasta_m": 168.0,
-                         "hyvaksytty": bool(165 <= hav <= 171),
-                         "tulkinta": "Huippuun ei osunut riittävästi pisteitä (ohut antennimasto, keilaus 0,43 pistettä/m²), joten pistepilven korkein havaittu arvo on alaraja. "
-                                     "Arvio 168 m on tornin tunnettu korkeus (määrittelyn mukaan), ei mittaus."}
+    try:
+        nn = M["nasinneula"]["mitat"]
+        hav = nn["korkein_havaittu_piste"]["h_maasta_m"]
+        k["1_nasinneula"] = {"korkein_havaittu_maasta_m": hav, "korkein_havaittu_z_n2000_m": nn["korkein_havaittu_piste"]["z_n2000_m"],
+                             "mastopisteita": nn["korkein_havaittu_piste"]["mastopisteita"], "tavoite_m": [165, 171],
+                             "lautasen_ulkoreuna_maasta_m": nn["lautanen"]["katon_ulkoreunan_korkeus_maasta_m"], "lautasen_halkaisija_m": nn["lautanen"]["halkaisija_m"],
+                             "varren_halkaisija_m": nn["varsi"]["halkaisija_m"],
+                             "arvio_huipun_korkeudesta_maasta_m": 168.0,
+                             "hyvaksytty": bool(165 <= hav <= 171),
+                             "tulkinta": "Huippuun ei osunut riittävästi pisteitä (ohut antennimasto, keilaus 0,43 pistettä/m²), joten pistepilven korkein havaittu arvo on alaraja. "
+                                         "Arvio 168 m on tornin tunnettu korkeus (määrittelyn mukaan), ei mittaus."}
+    except Exception as e:  # noqa: BLE001
+        k["1_nasinneula"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 1_nasinneula epäonnistui: %s" % repr(e)[:300])
     # 2. Piiput
-    v = M["naistenlahden_voimalaitos"]
-    pp = sorted(v["piiput"], key=lambda p: -p["korkeus_maasta_m"])
-    k["2_piippu"] = {"korkein_korkeus_maasta_m": pp[0]["korkeus_maasta_m"], "korkein_z_huippu_n2000_m": pp[0]["z_huippu_n2000_m"],
-                     "korkein_etaisyys_rakennuspolygoniin_m": pp[0]["etaisyys_rakennuspolygoniin_m"],
-                     "piippuja": [{"korkeus_maasta_m": p["korkeus_maasta_m"], "etaisyys_rakennuspolygoniin_m": p["etaisyys_rakennuspolygoniin_m"],
-                                   "halkaisija_arvio_m": p["halkaisija_arvio_m"]} for p in pp],
-                     "hyvaksytty": bool(pp[0]["etaisyys_rakennuspolygoniin_m"] < 20.0)}
+    try:
+        v = M["naistenlahden_voimalaitos"]
+        pp = sorted(v["piiput"], key=lambda p: -p["korkeus_maasta_m"])
+        k["2_piippu"] = {"korkein_korkeus_maasta_m": pp[0]["korkeus_maasta_m"], "korkein_z_huippu_n2000_m": pp[0]["z_huippu_n2000_m"],
+                         "korkein_etaisyys_rakennuspolygoniin_m": pp[0]["etaisyys_rakennuspolygoniin_m"],
+                         "piippuja": [{"korkeus_maasta_m": p["korkeus_maasta_m"], "etaisyys_rakennuspolygoniin_m": p["etaisyys_rakennuspolygoniin_m"],
+                                       "halkaisija_arvio_m": p["halkaisija_arvio_m"]} for p in pp],
+                         "hyvaksytty": bool(pp[0]["etaisyys_rakennuspolygoniin_m"] < 20.0)}
+    except Exception as e:  # noqa: BLE001
+        k["2_piippu"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 2_piippu epäonnistui: %s" % repr(e)[:300])
     # 3. Kuljetinsilta
-    kj = v["kuljetinsilta"]
-    k["3_kuljetinsilta"] = {"pituus_m": kj["pituus_m"], "leveys_m": kj["leveys_m"], "korkeus_alku_m": kj["korkeus_alkupisteessa_m"], "korkeus_loppu_m": kj["korkeus_loppupisteessa_m"],
-                            "korkeus_p50_m": kj["korkeus_maasta_p50_m"], "suunta_asteina_pohjoisesta": kj["suunta_asteina_pohjoisesta"],
-                            "kuvat": ["lahikuva_voimalaitos.png", "siluetti_naistenlahdelta.png"], "hyvaksytty": bool(kj["pituus_m"] >= 30 and kj["leveys_m"] <= 15)}
+    try:
+        kj = v["kuljetinsilta"]
+        k["3_kuljetinsilta"] = {"pituus_m": kj["pituus_m"], "leveys_m": kj["leveys_m"], "korkeus_alku_m": kj["korkeus_alkupisteessa_m"], "korkeus_loppu_m": kj["korkeus_loppupisteessa_m"],
+                                "korkeus_p50_m": kj["korkeus_maasta_p50_m"], "suunta_asteina_pohjoisesta": kj["suunta_asteina_pohjoisesta"],
+                                "kuvat": ["lahikuva_voimalaitos.png", "siluetti_naistenlahdelta.png"], "hyvaksytty": bool(kj["pituus_m"] >= 30 and kj["leveys_m"] <= 15)}
+    except Exception as e:  # noqa: BLE001
+        k["3_kuljetinsilta"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 3_kuljetinsilta epäonnistui: %s" % repr(e)[:300])
     # 4. Rakennukset
-    k["4_rakennukset"] = tarkista_rakennukset(a, rak)
+    try:
+        k["4_rakennukset"] = tarkista_rakennukset(a, rak)
+    except Exception as e:  # noqa: BLE001
+        k["4_rakennukset"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 4_rakennukset epäonnistui: %s" % repr(e)[:300])
     # 4b. Piikki siluetissa suunnassa noin 172 astetta
-    tm = M["tampellan_tehdasrakennukset"]["korkea_piippu_lahella"]
-    k["4b_siluetin_piikki"] = {"selitys": "Piikki on Tampellan alueen korkea piippu (E %.0f N %.0f), ei harhapisteitä." % tuple(tm[0]["sijainti"]["epsg3067"]) if tm else None,
-                               "korkeus_maasta_m": tm[0]["korkeus_maasta_m"] if tm else None, "pistepilven_todiste": tm[0].get("pistepilven_todiste") if tm else None,
-                               "poistetut_luokat": list(POISTETTAVAT_LUOKAT), "luokan_7_pisteita_poistettu": "ks. tyo/laser/loki.json (pisteet)",
-                               "huomio": "Luokkaa 18 ei ole aineistossa. Kohinasuodatus (4 m:n kennot, vähintään 3 pistettä 3 x 3 x 3 -ympäristössä) ja pilvisuodatus eivät poista piippua, koska sen pisteet ovat 1-3 m:n välein pystyjonossa."}
+    try:
+        tm = M["tampellan_tehdasrakennukset"]["korkea_piippu_lahella"]
+        k["4b_siluetin_piikki"] = {"selitys": "Piikki on Tampellan alueen korkea piippu (E %.0f N %.0f), ei harhapisteitä." % tuple(tm[0]["sijainti"]["epsg3067"]) if tm else None,
+                                   "korkeus_maasta_m": tm[0]["korkeus_maasta_m"] if tm else None, "pistepilven_todiste": tm[0].get("pistepilven_todiste") if tm else None,
+                                   "poistetut_luokat": list(POISTETTAVAT_LUOKAT), "luokan_7_pisteita_poistettu": "ks. tyo/laser/loki.json (pisteet)",
+                                   "huomio": "Luokkaa 18 ei ole aineistossa. Kohinasuodatus (4 m:n kennot, vähintään 3 pistettä 3 x 3 x 3 -ympäristössä) ja pilvisuodatus eivät poista piippua, koska sen pisteet ovat 1-3 m:n välein pystyjonossa."}
+    except Exception as e:  # noqa: BLE001
+        k["4b_siluetin_piikki"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 4b_siluetin_piikki epäonnistui: %s" % repr(e)[:300])
     # 5. Avoin maa
-    k["5_avoin_maa"] = tarkista_avoin_maa(rd, a, dem, pinta, rak)
+    try:
+        k["5_avoin_maa"] = tarkista_avoin_maa(rd, a, dem, pinta, rak)
+    except Exception as e:  # noqa: BLE001
+        k["5_avoin_maa"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 5_avoin_maa epäonnistui: %s" % repr(e)[:300])
     # 6. Koko
-    ts = lue_json(LTYO / "tiilet_tilasto.json")
-    k["6_koko"] = {"pinta_pmtiles_tavua": int(ts["tiedosto_tavua"]), "pinta_pmtiles_mt": round(ts["tiedosto_tavua"] / 1e6, 2),
-                   "z15_puhelinnakyma_pahin_tavua": int(ts["z15_puhelinnakyma_pahin_tavua"]), "z15_puhelinnakyma_pahin_mt": round(ts["z15_puhelinnakyma_pahin_tavua"] / 1e6, 2),
-                   "puhelinnakyman_maaritelma": "raskain 3 x 5 tiilen ikkuna zoomilla 15 (390 x 844 px:n näkymä)",
-                   "hyvaksytty": bool(ts["tiedosto_tavua"] < 30e6 and ts["z15_puhelinnakyma_pahin_tavua"] < 3e6)}
+    try:
+        ts = lue_json(LTYO / "tiilet_tilasto.json")
+        k["6_koko"] = {"pinta_pmtiles_tavua": int(ts["tiedosto_tavua"]), "pinta_pmtiles_mt": round(ts["tiedosto_tavua"] / 1e6, 2),
+                       "z15_puhelinnakyma_pahin_tavua": int(ts["z15_puhelinnakyma_pahin_tavua"]), "z15_puhelinnakyma_pahin_mt": round(ts["z15_puhelinnakyma_pahin_tavua"] / 1e6, 2),
+                       "puhelinnakyman_maaritelma": "raskain 3 x 5 tiilen ikkuna zoomilla 15 (390 x 844 px:n näkymä)",
+                       "hyvaksytty": bool(ts["tiedosto_tavua"] < 30e6 and ts["z15_puhelinnakyma_pahin_tavua"] < 3e6)}
+    except Exception as e:  # noqa: BLE001
+        k["6_koko"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 6_koko epäonnistui: %s" % repr(e)[:300])
     # 7. Siluetti
-    sil = lue_json(LTYO / "kuvat_tilasto.json")["siluetti_naistenlahdelta"]
-    ry = {}
-    for s_ in sil:
-        ry.setdefault(s_["ryhma"], []).append(s_)
-    def kaista(r):
-        su = [x["suunta_astetta"] for x in ry.get(r, [])]
-        return (min(su), max(su)) if su else (None, None)
-    pi, ku, to = kaista("piippu"), kaista("kuljetin"), kaista("torni")
-    erot = {"piiput_kuljetin_astetta": round(ku[0] - pi[1], 1) if None not in (pi[1], ku[0]) else None,
-            "kuljetin_nasinneula_astetta": round(to[0] - ku[1], 1) if None not in (to[0], ku[1]) else None}
-    nakyvia = {r: [int(x.get("nakyy", False)) for x in ry.get(r, [])] for r in ry}
-    k["7_siluetti"] = {"katselupiste_epsg3067": list(SILUETTI_PISTE), "silman_korkeus_vedesta_m": SILUETTI_KORKEUS_M, "suunta_astetta": SILUETTI_SUUNTA_DEG,
-                       "nakokulma_astetta": SILUETTI_KULMA_DEG, "kohteiden_nakyvyys": nakyvia, "suuntakulmat": {"piiput": pi, "kuljetin": ku, "nasinneula": to},
-                       "ryhmien_valinen_suuntaero": erot, "kuvat": ["siluetti_naistenlahdelta.png", "siluetti_maarittelyn_piste.png"],
-                       "maarittelyn_pisteen_tulos": "Pisteestä E 328500 N 6824500 kuljetin ja kattilarakennus jäävät lähirannan puuston ja piippujen taakse (ks. siluetti_maarittelyn_piste.png).",
-                       "hyvaksytty": bool(all(all(v_) for r, v_ in nakyvia.items() if r in ("piippu", "kuljetin", "torni")) and (erot["piiput_kuljetin_astetta"] or 0) > 0.5)}
+    try:
+        sil = lue_json(LTYO / "kuvat_tilasto.json")["siluetti_naistenlahdelta"]
+        ry = {}
+        for s_ in sil:
+            ry.setdefault(s_["ryhma"], []).append(s_)
+        def kaista(r):
+            su = [x["suunta_astetta"] for x in ry.get(r, [])]
+            return (min(su), max(su)) if su else (None, None)
+        pi, ku, to = kaista("piippu"), kaista("kuljetin"), kaista("torni")
+        erot = {"piiput_kuljetin_astetta": round(ku[0] - pi[1], 1) if None not in (pi[1], ku[0]) else None,
+                "kuljetin_nasinneula_astetta": round(to[0] - ku[1], 1) if None not in (to[0], ku[1]) else None}
+        nakyvia = {r: [int(x.get("nakyy", False)) for x in ry.get(r, [])] for r in ry}
+        k["7_siluetti"] = {"katselupiste_epsg3067": list(SILUETTI_PISTE), "silman_korkeus_vedesta_m": SILUETTI_KORKEUS_M, "suunta_astetta": SILUETTI_SUUNTA_DEG,
+                           "nakokulma_astetta": SILUETTI_KULMA_DEG, "kohteiden_nakyvyys": nakyvia, "suuntakulmat": {"piiput": pi, "kuljetin": ku, "nasinneula": to},
+                           "ryhmien_valinen_suuntaero": erot, "kuvat": ["siluetti_naistenlahdelta.png", "siluetti_maarittelyn_piste.png"],
+                           "maarittelyn_pisteen_tulos": "Pisteestä E 328500 N 6824500 kuljetin ja kattilarakennus jäävät lähirannan puuston ja piippujen taakse (ks. siluetti_maarittelyn_piste.png).",
+                           "hyvaksytty": bool(all(all(v_) for r, v_ in nakyvia.items() if r in ("piippu", "kuljetin", "torni")) and (erot["piiput_kuljetin_astetta"] or 0) > 0.5)}
+    except Exception as e:  # noqa: BLE001
+        k["7_siluetti"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistus 7_siluetti epäonnistui: %s" % repr(e)[:300])
+    try:
+        k["8_tarkistuskohteet"] = tarkistuskohteet(rd, dem, rak, M)
+    except Exception as e:  # noqa: BLE001
+        k["8_tarkistuskohteet"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
+        loki("VAROITUS: tarkistuskohteet epäonnistui: %s" % repr(e)[:300])
     kirjoita_json(LTYO / "tarkistus_1b.json", k)
     for nimi, v_ in k.items():
         loki("tarkistus %s: hyväksytty=%s" % (nimi, v_.get("hyvaksytty", v_.get("hyvaksytty_osuus"))))
@@ -1951,50 +2279,107 @@ def sha256_tiedosto(polku):
     return h.hexdigest()
 
 
+def paivita_aineisto_json(d, tuotokset):
+    """Lisää vaiheen 1 aineisto.json-tiedostoon (jos se on ulos-hakemistossa) laserkeilauksen lähteen, tiedostot ja lähdemerkinnän. Idempotentti."""
+    polku = ULOS / "aineisto.json"
+    if not polku.exists():
+        return False
+    a = lue_json(polku)
+    lahde = d["lahde"]
+    merkinta = lahde["lahdemerkinta"]
+    ehto = next((l.get("ehtoteksti_sanatarkasti") for l in a.get("lahteet", []) if l.get("id") == "mml_korkeusmalli" and l.get("ehtoteksti_sanatarkasti")), None)
+    uusi = {"id": "mml_laserkeilaus", "nimi": "Laserkeilausaineisto 0,5 p/m2 (rantavyöhyke): pintamalli, rakennusten korkeudet ja maamerkkien mitat",
+            "tuottaja": "Maanmittauslaitos",
+            "osoite": MML_OGC_OSOITE + " (prosessi " + LASER_PROSESSI + ", dataSetInput=" + MML_AINEISTO + "), varalähde " + LASER_PAITULI,
+            "kerrokset": ["pinta.pmtiles", "rakennuskorkeudet.json", "maamerkit.json"], "lisenssi": "CC BY 4.0", "lisenssi_url": LASER_LISENSSI,
+            "lahdemerkinta": merkinta + ".",
+            "ehtoteksti_sanatarkasti": ehto or "Creative Commons Nimeä 4.0 Kansainvälinen (CC BY 4.0), https://creativecommons.org/licenses/by/4.0/ (MML:n avoimen tietoaineiston lisenssi)",
+            "haettu": d["luotu"], "siirretty_tavua": lahde.get("siirretty_tavua_nyt"),
+            "huomio": "Keilaus: " + lahde["keilausselite"] + ". Lataus tehdään API-avaimella (GitHubin salaisuus MML_API_KEY), avainta ei kirjoiteta pakettiin. "
+                      "Jos avainta ei ole tai ruutu puuttuu, varalähteenä on Paitulin vuoden 2008 keilaus. Luettu 26.10.2026: MML:n OGC API Processes -kuvaus."}
+    a["lahteet"] = [l for l in a.get("lahteet", []) if l.get("id") != "mml_laserkeilaus"] + [uusi]
+    yht = a.get("lahdemerkinta_yhteensa", "")
+    if merkinta not in yht:
+        a["lahdemerkinta_yhteensa"] = (yht + " " + merkinta + ".").strip()
+    nimet = {t["nimi"] for t in a.get("tiedostot", [])}
+    a["tiedostot"] = [t for t in a.get("tiedostot", []) if t["nimi"] not in {x["nimi"] for x in tuotokset}] + \
+        [x for x in tuotokset if not x["nimi"].startswith("tarkistuskuvat/") and x["nimi"] != "tarkistus_1b.json"]
+    a.setdefault("tiilet", {})["pinta"] = {"tiedosto": "pinta.pmtiles", "muoto": "png", "koodaus": "mapbox-terrain-rgb",
+                                          "kaava": "korkeus_m = -10000 + (R*65536 + G*256 + B) * 0,1", "ei_dataa": "RGB (0,0,0)",
+                                          "tiilen_koko_px": 256, "minzoom": ZOOM_MIN, "maxzoom": ZOOM_MAX, "kvantisointi_m": PINTA_KVANTTI,
+                                          "lahde": "Laserkeilaus (pintamalli DSM 1 m, vain rantavyöhyke): " + lahde["keilausselite"],
+                                          "puuttuva_tiili": "Tiili puuttuu, jos se on pelkkää vesialuetta tai vyöhykkeen ulkopuolella."}
+    kirjoita_json(polku, a)
+    return True
+
+
 def vaihe_kuvaus():
-    """Kopioi julkaistavat tiedostot ulos-hakemistoon ja kirjoittaa aineisto_1b.json."""
+    """Kopioi julkaistavat tiedostot ulos-hakemistoon, kirjoittaa aineisto_1b.json ja päivittää aineisto.json."""
     t0 = time.time()
     ULOS.mkdir(parents=True, exist_ok=True)
     for nimi, lahde in (("rakennuskorkeudet.json", LTYO / "rakennuskorkeudet.json"), ("maamerkit.json", LTYO / "maamerkit.json"),
                         ("tarkistus_1b.json", LTYO / "tarkistus_1b.json"), ("pinta.pmtiles", LTYO / "pinta.pmtiles")):
-        shutil.copyfile(lahde, ULOS / nimi)
+        if lahde.exists():
+            shutil.copyfile(lahde, ULOS / nimi)
+        else:
+            loki("VAROITUS: %s puuttuu, sitä ei julkaista" % lahde.name)
     r = lue_json(LTYO / "ruudut.json")
     lk = loki_lue()
     a = lue_json(LTYO / "alue.json")
     rr = []
     for x in r["ruudut"]:
-        laz = LAZ / (x["ruutu"] + ".laz")
-        rr.append({"ruutu": x["ruutu"], "lehti": x["lehti"], "vuosi": x["vuosi"], "url": x["url"], "tavua": x["koko_tavua"], "sha256": sha256_tiedosto(laz),
-                   "keilauspaiva": x.get("metatiedot", {}).get("Keilauspaivamaara"), "pistetiheys": x.get("metatiedot", {}).get("Pistetiheys"),
-                   "korkeustarkkuus": x.get("metatiedot", {}).get("Korkeustarkkuus"), "keilain": x.get("metatiedot", {}).get("Keilain"),
+        laz = laz_polku(x)
+        md = x.get("metatiedot", {}) or {}
+        rr.append({"ruutu": x["ruutu"], "lehti": x["lehti"], "lahde": x.get("lahde"), "vuosi": x["vuosi"], "url": x["url"], "tavua": x["koko_tavua"],
+                   "sha256": sha256_tiedosto(laz) if laz.exists() else None,
+                   "keilauspaiva": md.get("Keilauspaivamaara"), "pistetiheys": md.get("Pistetiheys"),
+                   "korkeustarkkuus": md.get("Korkeustarkkuus"), "keilain": md.get("Keilain"), "projekti": md.get("Projekti(t)"),
+                   "pistepilvitunnus": md.get("Pistepilvitunnus"), "muokattu": md.get("Muokattu"),
+                   "pisteita_alueella": (lk.get("pisteet", {}).get(x["ruutu"]) or {}).get("pisteita_alueella"),
+                   "tiheys_p_m2": (lk.get("pisteet", {}).get(x["ruutu"]) or {}).get("tiheys_p_m2"),
+                   "tiheys_maalla_p_m2": (lk.get("pisteet", {}).get(x["ruutu"]) or {}).get("tiheys_maalla_p_m2"),
                    "vyohykkeen_osuus_km2": x["vyohykkeen_osuus_km2"]})
-    vuodet = sorted({x["vuosi"] for x in rr})
-    merkinta = "Sisältää Maanmittauslaitoksen laserkeilausaineistoa %s (CC BY 4.0)" % "/".join(str(v) for v in vuodet)
-    tarkistus = lue_json(LTYO / "tarkistus_1b.json")
+    vuodet = sorted({x["vuosi"] for x in rr if x["vuosi"]})
+    merkinta = laser_lahdemerkinta()
+    tarkistus = lue_json(LTYO / "tarkistus_1b.json", {})
     tuotokset = []
     for p_ in ("pinta.pmtiles", "rakennuskorkeudet.json", "maamerkit.json", "tarkistus_1b.json"):
-        tuotokset.append({"nimi": p_, "tavua": (ULOS / p_).stat().st_size, "sha256": sha256_tiedosto(ULOS / p_)})
+        if (ULOS / p_).exists():
+            tuotokset.append({"nimi": p_, "tavua": (ULOS / p_).stat().st_size, "sha256": sha256_tiedosto(ULOS / p_)})
     for p_ in sorted(LKUVAT.glob("*.png")):
         tuotokset.append({"nimi": "tarkistuskuvat/" + p_.name, "tavua": p_.stat().st_size, "sha256": sha256_tiedosto(p_)})
-    d = {"versio": 1, "vaihe": "1b", "luotu": nyt_iso(),
-         "kuvaus": "Laserkeilausaineistosta (MML, Paituli) johdettu pintamalli (DSM 1 m, Terrain-RGB-tiilet), rakennuskohtaiset korkeudet ja maamerkkien mitat Näsijärven eteläpäästä.",
+    mml_ruutuja = sum(1 for x in rr if x["lahde"] == "mml_tiedostopalvelu")
+    muoto = "LAZ (MML:n 0,5 p/m2 -aineisto: LAZ 1.2, pistemuoto 1, luokat 1-5), N2000" if mml_ruutuja else "LAZ 1.0, pistemuoto 1, MML:n luokitus"
+    d = {"versio": 2, "vaihe": "1c", "luotu": nyt_iso(),
+         "kuvaus": "Laserkeilausaineistosta (MML tiedostopalvelu, varalla Paituli 2008) johdettu pintamalli (DSM 1 m, Terrain-RGB-tiilet), rakennuskohtaiset korkeudet ja maamerkkien mitat Näsijärven eteläpäästä.",
          "alue": {"laatikko_epsg3067": a["alue_laatikko"], "vyohyke_m": a["vyohyke_m"], "vyohyke_km2": a["vyohyke_km2"], "koordinaatisto": "EPSG:3067, korkeudet N2000"},
-         "lahde": {"nimi": "Laserkeilausaineisto (MML)", "tuottaja": "Maanmittauslaitos", "palvelin": LASER_PAITULI, "indeksi": "2008_latest.shp",
+         "lahde": {"nimi": "Laserkeilausaineisto (MML)", "tuottaja": "Maanmittauslaitos", "palvelin": MML_OGC_OSOITE if mml_ruutuja else LASER_PAITULI,
+                   "prosessi": LASER_PROSESSI, "aineisto": MML_AINEISTO, "varalahde": LASER_PAITULI, "indeksi_varalahde": "2008_latest.shp",
                    "lisenssi": "CC BY 4.0", "lisenssi_url": LASER_LISENSSI, "lahdemerkinta": merkinta, "vuodet": vuodet,
-                   "tiedostomuoto": "LAZ 1.0, pistemuoto 1, MML:n luokitus", "ruudut": rr,
+                   "keilausselite": keilausselite(), "ruutuja_mml": mml_ruutuja, "ruutuja_2008_varalla": [x["ruutu"] for x in rr if x["lahde"] != "mml_tiedostopalvelu"],
+                   "tiedostomuoto": muoto, "ruudut": rr,
                    "tavua_yhteensa": int(sum(x["tavua"] for x in rr)),
-                   "huomio": "Aineisto on vuodelta %s eli vanhempi kuin Maastotietokanta 2025. Sen jälkeen rakennetut kohteet (esimerkiksi Ranta-Tampellan kerrostalot) eivät näy pistepilvessä." % "/".join(str(v) for v in vuodet)},
+                   "siirretty_tavua_nyt": int((lk.get("lataus") or {}).get("tavua", 0)),
+                   "pisteet_yhteensa": lk.get("pisteet_yhteensa"),
+                   "mml_haku": lk.get("mml_haku"),
+                   "huomio": "Käytetty keilaus: %s. Sen jälkeen rakennetut kohteet eivät näy pistepilvessä." % keilausselite()},
          "muut_lahteet": ["Vaiheen 1 välitulokset: Maastotietokanta 2025 (rakennus, osoite, tie, vesialue) ja MML:n 2 m korkeusmalli (ks. aineisto.json, vaihe 1)"],
          "parametrit": {"resoluutio_m": RES, "taytto_sade_ruutua": TAYTTOSADE, "zoom": [ZOOM_MIN, ZOOM_MAX], "kvantti_m": PINTA_KVANTTI,
                         "pienin_pistemaara_rakennukselle": PIENIN_PISTEMAARA, "kohina": {"tuki": KOHINA_TUKI, "raja_m": KOHINA_RAJA_M},
                         "pilvisuodatus": {"raja_m": PILVI_RAJA_M, "ruutu_m": PILVI_RUUTU_M, "vali_m": PILVI_VALI_M, "min_pisteita": PILVI_MIN_PISTEITA, "paksuus_m": PILVI_PAKSUUS_M},
-                        "poissulkutilavuudet": POISSULKUTILAVUUDET, "siluetti_piste": list(SILUETTI_PISTE), "tarkistuksen_siemen": TARKISTUS_SIEMEN},
+                        "poistetut_luokat_mml": list(MML_POISTETTAVAT_LUOKAT), "poistetut_luokat_2008": list(POISTETTAVAT_LUOKAT),
+                        "poissulkutilavuudet_vain_2008": POISSULKUTILAVUUDET, "siluetti_piste": list(SILUETTI_PISTE), "tarkistuksen_siemen": TARKISTUS_SIEMEN},
          "tuotokset": tuotokset,
-         "ajat_ja_siirto": {"siirto_tavua": int(sum(x["tavua"] for x in rr)), "lataus": lk.get("lataus"), "vaiheet_sekuntia": lk.get("vaiheet_sekuntia")},
-         "tarkistus": {kk: vv.get("hyvaksytty", vv.get("hyvaksytty_osuus")) for kk, vv in tarkistus.items()},
+         "ajat_ja_siirto": {"siirto_tavua": int((lk.get("lataus") or {}).get("tavua", 0)), "lataus": lk.get("lataus"), "vaiheet_sekuntia": lk.get("vaiheet_sekuntia")},
+         "tarkistus": {kk: vv.get("hyvaksytty", vv.get("hyvaksytty_osuus")) for kk, vv in tarkistus.items() if isinstance(vv, dict)},
          "lahdemerkinta_yhteensa": merkinta + ". Sisältää Maanmittauslaitoksen Maastotietokanta-aineistoa 04/2025 (CC BY 4.0)."}
     kirjoita_json(ULOS / "aineisto_1b.json", d)
-    loki("aineisto_1b.json kirjoitettu (%.0f s)" % (time.time() - t0))
+    paivitetty = False
+    try:
+        paivitetty = paivita_aineisto_json(d, tuotokset)
+    except Exception as e:  # noqa: BLE001
+        loki("VAROITUS: aineisto.json:n päivitys epäonnistui: %s" % repr(e)[:300])
+    loki("aineisto_1b.json kirjoitettu, aineisto.json päivitetty: %s (%.0f s)" % (paivitetty, time.time() - t0))
 
 
 # ----------------------------------------------------------------------------------------
@@ -2034,7 +2419,14 @@ def main(argv):
             continue
         t = time.time()
         loki("== vaihe %s ==" % n)
-        fn()
+        try:
+            fn()
+        except Exception as e:  # noqa: BLE001
+            teksti = traceback.format_exc()
+            loki("VIRHE vaiheessa %s: %s" % (n, repr(e)[:300]))
+            print(teksti[-3000:], flush=True)
+            loki_kirjoita("virhe", {"vaihe": n, "viesti": repr(e)[:500], "jaljitys": teksti[-2000:]})
+            return 1
         sek = loki_lue().get("vaiheet_sekuntia", {})
         sek[n] = round(time.time() - t, 1)
         loki_kirjoita("vaiheet_sekuntia", sek)

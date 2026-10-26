@@ -177,7 +177,8 @@ class MmlAsiakas:
                     nimi = p.split("?")[0].rsplit("/", 1)[-1]
                     lehti = x.get("mapSheetNumber") or x.get("mapSheet") or re.sub(r"\.(laz|las|zip)$", "", nimi, flags=re.I)
                     ulos.append({"path": p, "lehti": lehti, "nimi": nimi, "length": x.get("length"), "format": x.get("format"),
-                                 "crs": x.get("crs"), "mimeType": x.get("mimeType")})
+                                 "crs": x.get("crs"), "mimeType": x.get("mimeType"),
+                                 "meta": {k: v for k, v in x.items() if k not in ("path", "href", "url")}})
                 for v in x.values():
                     kayt(v)
             elif isinstance(x, list):

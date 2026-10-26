@@ -1,0 +1,11 @@
+{
+  "selite": "Vuoden 2008 keilauksen (Paitulin 2008_latest, 0,43 p/m2) arvot vaiheen 1b ajosta. Laser.py vertaa uuden keilauksen mittauksia näihin tarkistuskohteissa.",
+  "lahde": "RAPORTTI_vaihe1b.md ja vaiheen 1b tuotokset (maamerkit.json, rakennuskorkeudet.json), harjun korkein maapiste laskettu 2008-pistepilven luokan 2 pisteistä.",
+  "kohteet": {
+    "nasinneula": {"h_maasta_m": 152.0, "z_n2000_m": 261.2, "huomio": "Korkein havaittu piste, 6 mastopistettä. Ohut mastokärki jäi vajaaksi."},
+    "tampellan_piippu": {"h_maasta_m": 100.7, "z_n2000_m": 199.6},
+    "voimalaitoksen_paarakennus": {"h_p95_m": 46.0, "h_max_m": 90.0, "huomio": "Kattilarakennus. Maksimi voi sisältää piipun tai kuljettimen pisteitä."},
+    "ranta_tampellan_talo": {"fid": 11060, "h_p90_m": 0.02, "h_max_m": 0.82, "huomio": "Talo valmistui keilauksen jälkeen, tontilla ei ollut rakennusta."},
+    "pispalanharju": {"maanpinta_max_z_n2000_m": 160.7, "e": 325187.0, "n": 6823153.4, "huomio": "Korkein luokan 2 piste laatikossa E 322000-326200, N 6822100-6823500."}
+  }
+}

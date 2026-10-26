@@ -27,7 +27,11 @@ Onnistuneen ajon jälkeen paketti on osoitteessa `https://KÄYTTÄJÄNIMI.github
 | --- | --- |
 | `nasijarvi.pmtiles` | vektoritiilet, zoom 8–16 (rakennukset, kiinteistörajat, tiet, osoitteet, väylät, turvalaitteet, syvyydet) |
 | `maasto.pmtiles` | korkeustiilet Terrain-RGB-koodauksella, zoom 8–14 |
-| `puusto.pmtiles` | puuston pituus ja latvuspeitto, zoom 10–14 |
+| `puusto.pmtiles` | puuston pituus, latvuspeitto ja lehtipuuosuus (alfakanava, 10 %-yksikön askelin), zoom 10–14 |
+| `pinta.pmtiles` | rantavyöhykkeen pintamalli (DSM 1 m) Terrain-RGB-tiilinä, zoom 12–16, laserkeilauksesta |
+| `rakennuskorkeudet.json` | rakennusten korkeudet laserkeilauksesta (maanpinta, `h_max`, `h_p90`) |
+| `maamerkit.json` | maamerkkien mitat laserkeilauksesta (Näsinneula, Naistenlahden voimalaitos, Tampellan piippu ym.) |
+| `aineisto_1b.json` | laserosan kuvaus: käytetyt ruudut vuosineen, lähde, tarkistukset |
 | `osoitteet.json` | osoitehakemisto (kadun nimi, numero, postinumero, kunta ja sijainti), noin 1,7 Mt, Reittikartan osoitehaku lataa sen kerran |
 | `kiinteistot.json` | kiinteistötunnushakemisto (tunnus ja sijainti), noin 1,1 Mt, Reittikartan tunnushaku lataa sen kerran |
 | `aineisto.json` | paketin kuvaus: alue, lähteet, lisenssit ja lähdemerkinnät, kerrokset ja kentät, tiedostokoot ja tarkistussummat |
@@ -44,7 +48,11 @@ Pages-palvelu tukee sekä CORS-otsikoita että Range-pyyntöjä, joten PMTiles-t
 
 ## 7. Huomioitavaa
 
-- **Salaisuuksia ei tarvita.** Kaikki lähteet ovat avoimia ilman avainta, joten `MML_API_KEY` ei ole käytössä.
+- **Salaisuus `MML_API_KEY` (valinnainen).** MML:n uusi laserkeilaus (0,5 p/m², Tampereen seutu keilattu 2023) haetaan MML:n tiedostopalvelun OGC API Processes -rajapinnasta (`https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/`, prosessi `laserkeilausaineisto_05_karttalehti`). Rajapinta vaatii avoimen datan API-avaimen, joka on tallennettu repositorion salaisuudeksi nimellä `MML_API_KEY` (Settings, Secrets and variables, Actions). Työnkulku antaa avaimen vain laserkeilausaskeleen ympäristömuuttujana. Avainta ei tulosteta lokiin, kirjoiteta tiedostoihin eikä viedä pakettiin. Jos avainta ei ole tai haku epäonnistuu, laserosa kirjoittaa lokiin varoituksen ja käyttää Paitulin vuoden 2008 keilausta (ruutu kerrallaan varalähteenä), jolloin kaikki muu toimii ennallaan. Muut lähteet ovat avoimia ilman avainta.
+- **Laserkeilauksen välimuisti.** MML:n ruudut (LAZ, noin 400 Mt) tallennetaan `actions/cache`-välimuistiin tiedostonimen mukaan (`tyo/laser/raaka/laz/mml/`), eikä niitä ladata uudelleen, jos MML:n muokkausaika ja koko ovat ennallaan.
+- **Ajolokin yhteenveto.** Jokainen ajo kirjoittaa yhteenvedon (laserosan lähde, ruudut ja tiheys, tarkistuskohteet, maaston korkeustarkistus, tiedostokoot) tiedostoon `ajoloki/viimeisin.md` ja työntää sen haaraan `ajoloki` (pakotettu työntö vain tähän haaraan, `GITHUB_TOKEN`). Siksi työnkululla on `contents: write` -oikeus. Haara ei sisällä muuta kuin tämän tiedoston.
+- **Lehtipuuosuus.** Luken MVMI 2023 -lajitilavuuksista (mänty, kuusi, koivu, muu lehtipuu, m³/ha) lasketaan lehtipuuosuus ja koodataan `puusto.pmtiles`-tiilien alfakanavaan: A = 0 ei metsämaata, muuten osuus % = (255 − A) × 10 (±5 %-yksikköä). Keskipituus (R, G) ja latvuspeitto (B) eivät muutu.
+- **Ruovikot.** Ruovikkokerrosta (SYKE Corine) ei ole mukana, katso `RAPORTTI_vaihe1c.md`.
 - Aineisto ei ole tarkoitettu navigointiin eikä täytä asianmukaisen merikartan vaatimuksia. Traficomin syvyysaineistoa saa käyttää vain muuhun kuin navigointikäyttöön ja ei-kaupallisesti, ja lähdemerkintä tiedonsiirron ajankohtineen on pidettävä näkyvissä. Kaikki lähdemerkinnät ovat tiedostossa `aineisto.json`, kenttä `lahdemerkinta_yhteensa`.
 - Osoiteaineisto on DVV:n poiminta 3.2.2025. DVV lopetti avoimen jakelun 14.3.2025, joten osoitteet eivät päivity.
 - Ajon pitää onnistua alle 60 minuutissa ja alle 10 Gt levytilalla (GitHubin ilmaisen version rajat). Työnkulussa on lisäksi 55 minuutin aikaraja.
