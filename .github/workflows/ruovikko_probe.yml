@@ -38,6 +38,16 @@ jobs:
           if [ -f clc.zip ]; then
             { echo; echo "## zip"; ls -l clc.zip; unzip -l clc.zip | head -40; } >> ruovikko.md 2>&1 || true
           fi
+      - name: Luokkataulukko ja rasterin tiedot
+        shell: bash
+        run: |
+          cd ulos_koe
+          sudo apt-get install -y --no-install-recommends gdal-bin >/dev/null 2>&1
+          unzip -o -q clc.zip Clc2018_FI20m.tif.vat.dbf Clc2018_FI20m.tif.xml Clc2018_FI20m.tif.aux.xml Clc2018_FI20m.tfw
+          { echo; echo "## vat.dbf (ogrinfo)"; echo '```'; ogrinfo -al -geom=NO Clc2018_FI20m.tif.vat.dbf | head -400; echo '```'
+            echo "## xml"; echo '```'; head -c 4000 Clc2018_FI20m.tif.xml; echo; echo '```'
+            echo "## aux.xml"; echo '```'; head -c 1500 Clc2018_FI20m.tif.aux.xml; echo; echo '```'
+            echo "## gdalinfo (zip, vsizip)"; echo '```'; gdalinfo /vsizip/clc.zip/Clc2018_FI20m.tif 2>&1 | head -40; echo '```'; } >> ruovikko.md 2>&1
       - name: Julkaise yhteenveto haaraan ajoloki-ruovikko
         if: always()
         shell: bash
