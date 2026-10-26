@@ -1,0 +1,915 @@
+{
+ "alku": "2026-10-26T08:49:00Z",
+ "avain_asetettu": true,
+ "avaimen_pituus_ok": true,
+ "tunnistus": "otsake",
+ "prosesseja": 36,
+ "laser_prosessi_listassa": true,
+ "prosessin_kuvaus": {
+  "id": "laserkeilausaineisto_05_karttalehti",
+  "title": "Karttalehtikohtaisten laserkeilausaineistotiedostojen haku, EPSG:3067. Pistetiheys on 0,5 pistettä/m²",
+  "description": "Hakurajoitus: 100 karttalehteä / haku; Arvioitu tiedoston koko 5,1 Mt/km²",
+  "version": "1.0",
+  "jobControlOptions": [
+   "async-execute"
+  ],
+  "outputTransmission": [
+   "value"
+  ],
+  "inputs": {
+   "mapSheetInput": {
+    "title": "Karttalehti",
+    "description": "Laserkeilausaineiston 0.5p -tietojen hakeminen karttalehtinumerolla, Karttalehtijako 1:5000, esim. M3342B4",
+    "schema": {
+     "maxItems": 100,
+     "minItems": 1,
+     "type": "array",
+     "items": {
+      "type": "string",
+      "exampleSetFlag": false,
+      "types": [
+       "array"
+      ]
+     },
+     "types": [
+      "array"
+     ]
+    }
+   },
+   "fileFormatInput": {
+    "title": "Tiedostomuoto",
+    "description": "Ladattavan aineiston tiedostoformaatti",
+    "schema": {
+     "type": "string",
+     "types": [
+      "string"
+     ],
+     "enum": [
+      "LAZ"
+     ]
+    }
+   },
+   "dataSetInput": {
+    "title": "Aineisto",
+    "description": "Ladattavan aineiston valinta",
+    "schema": {
+     "type": "string",
+     "types": [
+      "string"
+     ],
+     "enum": [
+      "05p_2008-2019",
+      "05p_2020-",
+      "Uusin"
+     ]
+    }
+   }
+  },
+  "outputs": {
+   "jsonOutput": {
+    "schema": {
+     "type": "string",
+     "types": [
+      "string"
+     ]
+    }
+   }
+  },
+  "links": [
+   {
+    "href": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/ogcproc/v1/processes/laserkeilausaineisto_05_karttalehti/execution",
+    "rel": "http://www.opengis.net/def/rel/ogc/1.0/execute",
+    "title": "Execute endpoint"
+   }
+  ]
+ },
+ "yksi_lehti": {
+  "tila": "successful",
+  "sekuntia": 6.2,
+  "tulokset": {
+   "uuid": "982bcf19-e6ea-4c67-a3ff-ebbfed5a0fb5",
+   "jobDescription": {
+    "id": "laserkeilausaineisto_05_karttalehti",
+    "inputs": {
+     "mapSheetInput": [
+      "M4212E3"
+     ],
+     "fileFormatInput": "LAZ",
+     "dataSetInput": "Uusin"
+    }
+   },
+   "processId": "laserkeilausaineisto_05_karttalehti",
+   "status": "successful",
+   "progress": 100,
+   "jobCreateTime": "2026-10-26T10:49:03.276+02:00",
+   "statusMessage": "Response successful, found 1 of 1 based on user's mapSheetInput parameter list",
+   "owner": "default",
+   "results": [
+    {
+     "path": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/982bcf19-e6ea-4c67-a3ff-ebbfed5a0fb5/M4212E3.laz",
+     "format": "LAZ",
+     "crs": "etrs-tm35fin",
+     "lastModified": "2023-09-21T11:58:04.746973Z",
+     "dataset": "laser",
+     "datasetVersion": "automaattinen",
+     "mimeType": "application/x-laz",
+     "length": "26995816",
+     "mapSheetNumber": "M4212E3",
+     "pointCloudID": "laser/automaattinen/2023/20230107_Leica_Tampere_kesa/Harvennettu/M4212E3",
+     "project": "20230107_Leica_Tampere_kesa",
+     "scanner": "CityMapper, 2L",
+     "pointDensity": "0.5 pistetta/m2",
+     "flightAltitude": "1796 m",
+     "dateOfScanning": "2023-06-08",
+     "yearOfScanning": "2023",
+     "timeframe": "C",
+     "elevationSystem": "N2000",
+     "elevationPrecision": "0.1 m"
+    },
+    {
+     "zipPath": "https://avoin-paikkatieto.maanmittauslaitos.fi/tiedostopalvelu/dl/v1/uncompressed/982bcf19-e6ea-4c67-a3ff-ebbfed5a0fb5"
+    }
+   ]
+  },
+  "laz": {
+   "versio": "1.2",
+   "pistemuoto": 1,
+   "pisteita": 3397487,
+   "luotu": "2023-09-21",
+   "luokat": {
+    "1": 4774,
+    "2": 1636926,
+    "3": 13710,
+    "4": 146495,
+    "5": 1595582
+   },
+   "x": [
+    323000.0,
+    325999.99
+   ],
+   "y": [
+    6822000.0,
+    6824999.98
+   ],
+   "z": [
+    76.27,
+    177.51
+   ],
+   "ohjelmisto": "las2las64 (version 230123)",
+   "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+   "vlr": [
+    "LASF_Projection/34735"
+   ],
+   "global_encoding": 1,
+   "kentat": [
+    "X",
+    "Y",
+    "Z",
+    "intensity",
+    "return_number",
+    "number_of_returns",
+    "scan_direction_flag",
+    "edge_of_flight_line",
+    "classification",
+    "synthetic",
+    "key_point",
+    "withheld",
+    "scan_angle_rank",
+    "user_data",
+    "point_source_id",
+    "gps_time"
+   ],
+   "return_number_max": 5,
+   "number_of_returns_max": 5,
+   "gps_time": [
+    370303823.5500823,
+    370375235.267538,
+    370305168.2139092
+   ],
+   "gps_paiva_min": "2023-06-08",
+   "gps_paiva_med": "2023-06-09",
+   "gps_paiva_max": "2023-06-09",
+   "tiheys_p_m2_laatikossa": 0.378
+  }
+ },
+ "kymmenen_lehtea": {
+  "tila": "successful",
+  "sekuntia": 18.5,
+  "tiedostot": [
+   {
+    "lehti": "M4212G4",
+    "nimi": "M4212G4.laz",
+    "length": "20860792",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212G3",
+    "nimi": "M4212G3.laz",
+    "length": "59293730",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212G2",
+    "nimi": "M4212G2.laz",
+    "length": "1132551",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212G1",
+    "nimi": "M4212G1.laz",
+    "length": "28702246",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212E4",
+    "nimi": "M4212E4.laz",
+    "length": "39497754",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212E3",
+    "nimi": "M4212E3.laz",
+    "length": "26995816",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212E2",
+    "nimi": "M4212E2.laz",
+    "length": "51519977",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4212E1",
+    "nimi": "M4212E1.laz",
+    "length": "49289345",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4214A2",
+    "nimi": "M4214A2.laz",
+    "length": "49343773",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   },
+   {
+    "lehti": "M4214A1",
+    "nimi": "M4214A1.laz",
+    "length": "78671307",
+    "format": "LAZ",
+    "crs": "etrs-tm35fin",
+    "mimeType": "application/x-laz"
+   }
+  ],
+  "laz": [
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 2691885,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 852,
+     "2": 668059,
+     "3": 9615,
+     "4": 85678,
+     "5": 1927681
+    },
+    "x": [
+     329000.03,
+     331999.99
+    ],
+    "y": [
+     6825000.0,
+     6827999.99
+    ],
+    "z": [
+     95.45,
+     158.91
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370375094.9240443,
+     370378377.7955626,
+     370377296.2662424
+    ],
+    "gps_paiva_min": "2023-06-09",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.299,
+    "lehti": "M4212G4",
+    "tavua": 20860792,
+    "lataus_s": 14.3
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 7577413,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 5975,
+     "2": 2588850,
+     "3": 26439,
+     "4": 260028,
+     "5": 4696121
+    },
+    "x": [
+     329000.0,
+     331999.99
+    ],
+    "y": [
+     6822000.0,
+     6824999.98
+    ],
+    "z": [
+     80.26,
+     170.72
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370303902.7258379,
+     370375152.37826556,
+     370305092.87390405
+    ],
+    "gps_paiva_min": "2023-06-08",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.842,
+    "lehti": "M4212G3",
+    "tavua": 59293730,
+    "lataus_s": 37.8
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 133223,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 177,
+     "2": 54649,
+     "3": 269,
+     "4": 3250,
+     "5": 74878
+    },
+    "x": [
+     326000.0,
+     328999.86
+    ],
+    "y": [
+     6825000.22,
+     6827930.01
+    ],
+    "z": [
+     95.65,
+     128.79
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370375141.46106577,
+     370378325.2565546,
+     370375192.64191145
+    ],
+    "gps_paiva_min": "2023-06-09",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.015,
+    "lehti": "M4212G2",
+    "tavua": 1132551,
+    "lataus_s": 1.6
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 3580017,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 10438,
+     "2": 1726057,
+     "3": 10009,
+     "4": 101281,
+     "5": 1732232
+    },
+    "x": [
+     326000.0,
+     328999.99
+    ],
+    "y": [
+     6822000.0,
+     6824999.26
+    ],
+    "z": [
+     14.65,
+     261.46
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370303860.1508521,
+     370375191.87461674,
+     370305108.070385
+    ],
+    "gps_paiva_min": "2023-06-08",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.398,
+    "lehti": "M4212G1",
+    "tavua": 28702246,
+    "lataus_s": 18.0
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 5012153,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 4716,
+     "2": 2008831,
+     "3": 20092,
+     "4": 202213,
+     "5": 2776301
+    },
+    "x": [
+     323000.0,
+     325999.99
+    ],
+    "y": [
+     6825000.0,
+     6827999.99
+    ],
+    "z": [
+     95.48,
+     149.34
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370375178.37925076,
+     370378293.1759997,
+     370376093.96444136
+    ],
+    "gps_paiva_min": "2023-06-09",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.557,
+    "lehti": "M4212E4",
+    "tavua": 39497754,
+    "lataus_s": 24.6
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 3397487,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 4774,
+     "2": 1636926,
+     "3": 13710,
+     "4": 146495,
+     "5": 1595582
+    },
+    "x": [
+     323000.0,
+     325999.99
+    ],
+    "y": [
+     6822000.0,
+     6824999.98
+    ],
+    "z": [
+     76.27,
+     177.51
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370303823.5500823,
+     370375235.267538,
+     370305168.2139092
+    ],
+    "gps_paiva_min": "2023-06-08",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.378,
+    "lehti": "M4212E3",
+    "tavua": 26995816,
+    "lataus_s": 17.0
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 6634484,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 5544,
+     "2": 3360469,
+     "3": 26218,
+     "4": 271423,
+     "5": 2970830
+    },
+    "x": [
+     320000.0,
+     322999.99
+    ],
+    "y": [
+     6825000.0,
+     6827999.99
+    ],
+    "z": [
+     82.26,
+     197.78
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370375218.36241305,
+     370378250.9838289,
+     370376053.6352446
+    ],
+    "gps_paiva_min": "2023-06-09",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.737,
+    "lehti": "M4212E2",
+    "tavua": 51519977,
+    "lataus_s": 31.8
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 6217528,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 6239,
+     "2": 2281322,
+     "3": 21955,
+     "4": 238137,
+     "5": 3669875
+    },
+    "x": [
+     320000.0,
+     322999.99
+    ],
+    "y": [
+     6822124.79,
+     6824999.99
+    ],
+    "z": [
+     77.21000000000001,
+     181.12
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370303775.1484206,
+     370375276.25911474,
+     370373838.8518113
+    ],
+    "gps_paiva_min": "2023-06-08",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.721,
+    "lehti": "M4212E1",
+    "tavua": 49289345,
+    "lataus_s": 30.5
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 6367094,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 1176,
+     "2": 1945061,
+     "3": 22852,
+     "4": 221669,
+     "5": 4176336
+    },
+    "x": [
+     332000.0,
+     334999.99
+    ],
+    "y": [
+     6825000.0,
+     6827999.99
+    ],
+    "z": [
+     95.64,
+     168.11
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370375053.5348163,
+     370378418.6103878,
+     370377256.05923396
+    ],
+    "gps_paiva_min": "2023-06-09",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 0.707,
+    "lehti": "M4214A2",
+    "tavua": 49343773,
+    "lataus_s": 30.3
+   },
+   {
+    "versio": "1.2",
+    "pistemuoto": 1,
+    "pisteita": 10150759,
+    "luotu": "2023-09-21",
+    "luokat": {
+     "1": 1884,
+     "2": 2893222,
+     "3": 35855,
+     "4": 339560,
+     "5": 6880238
+    },
+    "x": [
+     332000.0,
+     334999.99
+    ],
+    "y": [
+     6822000.0,
+     6824999.99
+    ],
+    "z": [
+     93.35000000000001,
+     162.59
+    ],
+    "ohjelmisto": "las2las64 (version 230123)",
+    "jarjestelma": "LAStools (c) by rapidlasso GmbH",
+    "vlr": [
+     "LASF_Projection/34735"
+    ],
+    "global_encoding": 1,
+    "kentat": [
+     "X",
+     "Y",
+     "Z",
+     "intensity",
+     "return_number",
+     "number_of_returns",
+     "scan_direction_flag",
+     "edge_of_flight_line",
+     "classification",
+     "synthetic",
+     "key_point",
+     "withheld",
+     "scan_angle_rank",
+     "user_data",
+     "point_source_id",
+     "gps_time"
+    ],
+    "return_number_max": 5,
+    "number_of_returns_max": 5,
+    "gps_time": [
+     370303945.0651789,
+     370375111.9982109,
+     370374004.4238785
+    ],
+    "gps_paiva_min": "2023-06-08",
+    "gps_paiva_med": "2023-06-09",
+    "gps_paiva_max": "2023-06-09",
+    "tiheys_p_m2_laatikossa": 1.128,
+    "lehti": "M4214A1",
+    "tavua": 78671307,
+    "lataus_s": 48.0
+   }
+  ]
+ },
+ "pyyntoja": 23,
+ "loppu": "2026-10-26T08:54:01Z"
+}
