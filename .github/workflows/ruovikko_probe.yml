@@ -1,0 +1,52 @@
+name: Ruovikkoaineiston koeajo
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["probe_ruovikko/**", ".github/workflows/ruovikko_probe.yml"]
+
+permissions:
+  contents: write
+
+jobs:
+  koe:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Selvitä SYKEn Corine 2018 -latausosoitteiden saatavuus
+        shell: bash
+        run: |
+          mkdir -p ulos_koe
+          {
+            echo "# SYKE Corine 2018 -koeajo $(date -u +%FT%TZ)"
+            echo
+            for u in \
+              "https://wwwd3.ymparisto.fi/d3/Static_rs/spesific/clc2018_fi20m.zip" \
+              "https://wwwd3.ymparisto.fi/d3/Static_rs/spesific/clc2018eu25ha.zip" \
+              "https://paikkatiedot.ymparisto.fi/geoserver/inspire_lc/wfs?service=WFS&request=GetCapabilities" \
+              "https://ckan.ymparisto.fi/en/dataset/corine-maanpeite-2018"; do
+              echo "## HEAD $u"
+              echo '```'
+              curl -sS -I -L -m 60 "$u" 2>&1 | head -20 || true
+              echo '```'
+            done
+          } > ulos_koe/ruovikko.md 2>&1
+          cd ulos_koe
+          curl -sS -L -m 280 -o clc.zip "https://wwwd3.ymparisto.fi/d3/Static_rs/spesific/clc2018_fi20m.zip" >> ruovikko.md 2>&1 || echo "lataus epäonnistui: $?" >> ruovikko.md
+          if [ -f clc.zip ]; then
+            { echo; echo "## zip"; ls -l clc.zip; unzip -l clc.zip | head -40; } >> ruovikko.md 2>&1 || true
+          fi
+      - name: Julkaise yhteenveto haaraan ajoloki-ruovikko
+        if: always()
+        shell: bash
+        run: |
+          git config user.name "github-actions"
+          git config user.email "actions@users.noreply.github.com"
+          git checkout --orphan ajoloki-ruovikko
+          git rm -rf --quiet . || true
+          cp ulos_koe/ruovikko.md . 2>/dev/null || true
+          git add ruovikko.md
+          git commit -m "Ruovikkokoeajon yhteenveto" --quiet
+          git push --force origin HEAD:ajoloki-ruovikko
