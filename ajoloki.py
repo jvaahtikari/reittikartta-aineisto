@@ -180,10 +180,32 @@ def maamerkit():
             t.append("- Naistenlahden voimalaitos: piippuja %d (korkeudet m: %s), kuljetinsilta %s" % (
                 len(m.get("piiput", [])), ", ".join(luku(p.get("korkeus_maasta_m")) for p in m.get("piiput", [])),
                 "tunnistettu, pituus %s m" % luku((m.get("kuljetinsilta") or {}).get("pituus_m")) if m.get("kuljetinsilta") else "ei tunnistettu"))
+        if m.get("tunnus") == "naistenlahden_voimalaitos" and m.get("diagnostiikka"):
+            dg = m["diagnostiikka"]
+            t.append("- Voimalaitoksen diagnostiikka: hallien alat m² %s, kuljetinehdokkaat (nDSM yli 10 m, ilman suuria hallirakennuksia) %s" % (
+                dg.get("hallien_ala_m2"), json.dumps(dg.get("kuljetinehdokkaita_nDSM_yli_10_m"), ensure_ascii=False)))
         if m.get("tunnus") == "nasinneula":
             mi = m.get("mitat") or {}
             t.append("- Näsinneula: korkein havaittu %s m maasta, lautasen halkaisija %s m, varren halkaisija %s m" % (
                 luku((mi.get("korkein_havaittu_piste") or {}).get("h_maasta_m")), luku((mi.get("lautanen") or {}).get("halkaisija_m")), luku((mi.get("varsi") or {}).get("halkaisija_m"))))
+    return t
+
+
+def aluevertailut(tark):
+    t = ["## 2c. Rakennuskohtaiset vertailut (2008 ja uusi)"]
+    k = (tark or {}).get("8_tarkistuskohteet") or {}
+    for avain, otsikko in (("ranta_tampella", "Ranta-Tampellan kerrostalot"), ("naistenlahden_alue", "Naistenlahden voimalaitoksen alue (sisältää Naistenlahti 3:n)")):
+        v = k.get(avain)
+        if not v or v.get("virhe"):
+            t.append("%s: ei tietoa (%s)" % (otsikko, (v or {}).get("virhe", "puuttuu")))
+            continue
+        t.append("**%s.** %s Keilauksen jälkeen rakennetuista (2008: ei näkynyt) korkeuden sai %s kpl, ilman korkeutta nyt %s kpl." % (
+            otsikko, v.get("selite") or "", v.get("jotka_eivat_nakyneet_2008_ja_saivat_korkeuden"), v.get("ilman_korkeutta_nyt")))
+        t.append("")
+        t += taulukko(["fid", "ala m²", "käyttö", "h_p90 2008", "h_max 2008", "2008 ei näkynyt", "h_p90 uusi", "h_max uusi", "pisteitä", "uusi ei näkynyt"],
+                      [[r["fid"], luku(r.get("ala_m2"), 0), r.get("kaytto"), luku(r.get("vanha_h_p90_m"), 1), luku(r.get("vanha_h_max_m"), 1), r.get("vanha_ei_keilattu"),
+                        luku(r.get("uusi_h_p90_m"), 1), luku(r.get("uusi_h_max_m"), 1), r.get("uusi_pisteita"), r.get("uusi_ei_keilattu")] for r in v.get("rakennukset", [])])
+        t.append("")
     return t
 
 
@@ -327,7 +349,7 @@ def main(argv):
              "- Kirjoitettu: %s UTC." % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(nyt)),
              "- Kesto tähän asti: %s s." % (luku(nyt - alku, 0) if alku else "-"),
              "- Työnkulun tila ennen tätä askelta: %s." % os.environ.get("AJO_TILA", "-"), ""]
-    for osa in (laserosa, lambda: tarkistuskohteet(tark), maamerkit, lambda: rakennukset(tark), lambda: muut_tarkistukset(tark), maasto, puusto, tarkistus_py, koot, lokit):
+    for osa in (laserosa, lambda: tarkistuskohteet(tark), maamerkit, lambda: aluevertailut(tark), lambda: rakennukset(tark), lambda: muut_tarkistukset(tark), maasto, puusto, tarkistus_py, koot, lokit):
         try:
             rivit += osa() + [""]
         except Exception as e:  # noqa: BLE001

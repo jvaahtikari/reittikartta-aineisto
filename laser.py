@@ -1224,7 +1224,7 @@ def mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit):
                 avattu.append(q)
     hallit = sorted(avattu, key=lambda q: -q.area)
     tulos = {"tunnus": "naistenlahden_voimalaitos", "nimi": "Naistenlahden voimalaitos", "tyyppi": "voimalaitos",
-             "huomio": "Keilaus: " + keilausselite() + ". Laitoksen sen jälkeen tehdyt laajennukset ja uudet piiput eivät näy aineistossa."}
+             "huomio": "Keilaus: " + keilausselite() + ". Keilauksen jälkeen tehdyt muutokset eivät näy aineistossa."}
     rakennukset = []
     for g in hallit[:3]:
         m = rd2.piirra(g)
@@ -1253,6 +1253,7 @@ def mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit):
     suuri = rd2.piirra(unary_union([g.buffer(1.5) for g in hallit])) if hallit else np.zeros(nz.shape, dtype=bool)
     ohut = (nz > 10.0) & ~suuri
     kuljettimet = []
+    ehdokkaat_diag = []
     for g in vektoroi(ohut, rd2):
         if g.area < 40:
             continue
@@ -1260,6 +1261,8 @@ def mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit):
         xs, ys = mr.exterior.coords.xy
         sivut = sorted([math.hypot(xs[i + 1] - xs[i], ys[i + 1] - ys[i]) for i in range(2)])
         leveys, pituus = sivut[0], sivut[1]
+        ehdokkaat_diag.append({"pituus_m": round(float(pituus), 1), "leveys_m": round(float(leveys), 1), "ala_m2": round(float(g.area), 0),
+                               "keskipiste_e_n": [round(float(g.centroid.x), 0), round(float(g.centroid.y), 0)]})
         if pituus < 40 or leveys > 14:
             continue
         kuljettimet.append((pituus, leveys, g, mr))
@@ -1310,6 +1313,8 @@ def mittaa_voimalaitos(rd, dem, pinta, kapeat, rak_polygonit):
         }
     else:
         tulos["kuljetinsilta"] = None
+    ehdokkaat_diag.sort(key=lambda d: -d["pituus_m"])
+    tulos["diagnostiikka"] = {"hallien_ala_m2": [round(float(q.area), 0) for q in hallit[:5]], "kuljetinehdokkaita_nDSM_yli_10_m": ehdokkaat_diag[:6]}
     tulos["menetelma"] = {
         "kattilarakennus": "Pintamallin nDSM (pinta miinus DEM) yli 15 m, yhtenäinen alue, jonka kapeat osat on avattu pois 3 m:n puskurilla (sisään ja ulos).",
         "piiput": "Korkeat kapeat rakenteet: pistejoukot, joissa on pisteitä yli 40 m maan yläpuolella ja joiden ylimmän 10 m:n pisteet mahtuvat 14 m:n laajuuteen. "
@@ -2160,6 +2165,27 @@ def tarkistuskohteet(rd, dem, rak, M):
     for nimi, fn_ in (("nasinneula", nasinneula), ("tampellan_piippu", piippu), ("voimalaitoksen_paarakennus", paarakennus), ("ranta_tampellan_talo", talo), ("pispalanharju_maanpinta", harju)):
         kirjaa(nimi, fn_)
     t["hyvaksytty"] = bool(all(v_.get("hyvaksytty", False) for v_ in t["kohteet"].values()))
+    ver_koko = lue_json(Path(__file__).with_name("vertailu_2008.json"), {})
+
+    def vertaa(vanhat):
+        """Rakennuskohtainen vertailu: vanhat (2008) ja uudet korkeudet samoille rakennustunnuksille."""
+        rivit = []
+        for fid, v_ in sorted(vanhat.items(), key=lambda kv: -kv[1].get("ala_m2", 0)):
+            r = rk.get(str(fid)) or {}
+            rivit.append({"fid": int(fid), "ala_m2": v_.get("ala_m2"), "kaytto": v_.get("kaytto") or r.get("kaytto"),
+                          "vanha_h_p90_m": v_.get("h_p90"), "vanha_h_max_m": v_.get("h_max"), "vanha_ei_keilattu": int(bool(v_.get("ei_keilattu") or v_.get("epavarma"))),
+                          "uusi_h_p90_m": r.get("h_p90"), "uusi_h_max_m": r.get("h_max"), "uusi_pisteita": r.get("pisteita"),
+                          "uusi_ei_keilattu": int(bool(r.get("ei_keilattu") or r.get("epavarma"))) if r else None})
+        return rivit
+    for avain, lahde_avain in (("naistenlahden_alue", "naistenlahden_alue"), ("ranta_tampella", "ranta_tampellan_kerrostalot")):
+        try:
+            rr = vertaa(ver_koko.get(lahde_avain, {}).get("rakennukset", {}))
+            t[avain] = {"selite": ver_koko.get(lahde_avain, {}).get("selite"), "rakennukset": rr,
+                        "jotka_eivat_nakyneet_2008_ja_saivat_korkeuden": int(sum(1 for r in rr if r["vanha_ei_keilattu"] and r["uusi_ei_keilattu"] == 0)),
+                        "ilman_korkeutta_nyt": int(sum(1 for r in rr if r["uusi_h_p90_m"] is None or r["uusi_ei_keilattu"]))}
+        except Exception as e:  # noqa: BLE001
+            loki("VAROITUS: aluevertailu %s epäonnistui: %s" % (avain, repr(e)[:300]))
+            t[avain] = {"virhe": repr(e)[:300]}
     return t
 
 
@@ -2201,9 +2227,13 @@ def vaihe_tarkista():
     # 3. Kuljetinsilta
     try:
         kj = v["kuljetinsilta"]
-        k["3_kuljetinsilta"] = {"pituus_m": kj["pituus_m"], "leveys_m": kj["leveys_m"], "korkeus_alku_m": kj["korkeus_alkupisteessa_m"], "korkeus_loppu_m": kj["korkeus_loppupisteessa_m"],
-                                "korkeus_p50_m": kj["korkeus_maasta_p50_m"], "suunta_asteina_pohjoisesta": kj["suunta_asteina_pohjoisesta"],
-                                "kuvat": ["lahikuva_voimalaitos.png", "siluetti_naistenlahdelta.png"], "hyvaksytty": bool(kj["pituus_m"] >= 30 and kj["leveys_m"] <= 15)}
+        if kj is None:
+            k["3_kuljetinsilta"] = {"tunnistettu": False, "hyvaksytty": False,
+                                    "selite": "Kapeaa, yli 40 m pitkää ja yli 10 m korkeaa rakennetta ei löytynyt voimalaitoksen ympäriltä käytetystä keilauksesta (" + keilausselite() + ")."}
+        else:
+            k["3_kuljetinsilta"] = {"pituus_m": kj["pituus_m"], "leveys_m": kj["leveys_m"], "korkeus_alku_m": kj["korkeus_alkupisteessa_m"], "korkeus_loppu_m": kj["korkeus_loppupisteessa_m"],
+                                    "korkeus_p50_m": kj["korkeus_maasta_p50_m"], "suunta_asteina_pohjoisesta": kj["suunta_asteina_pohjoisesta"],
+                                    "kuvat": ["lahikuva_voimalaitos.png", "siluetti_naistenlahdelta.png"], "hyvaksytty": bool(kj["pituus_m"] >= 30 and kj["leveys_m"] <= 15)}
     except Exception as e:  # noqa: BLE001
         k["3_kuljetinsilta"] = {"virhe": repr(e)[:300], "hyvaksytty": False}
         loki("VAROITUS: tarkistus 3_kuljetinsilta epäonnistui: %s" % repr(e)[:300])

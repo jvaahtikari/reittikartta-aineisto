@@ -134,7 +134,7 @@ def tarkista_aineisto_json():
 
 
 def tarkista_koot(a):
-    kok = sum(p.stat().st_size for p in ULOS.rglob("*") if p.is_file() and p.name != "tarkistus.json")
+    kok = sum(p.stat().st_size for p in ULOS.rglob("*") if p.is_file() and p.name != "tarkistus.json" and "tarkistuskuvat" not in p.parts)   # tarkistuskuvat poistetaan ennen julkaisua
     pmt = sum((ULOS / n).stat().st_size for n in ("nasijarvi.pmtiles", "maasto.pmtiles", "puusto.pmtiles"))
     kirjaa("5_paketin_koko", kok < 150e6, kokonaiskoko_mt=round(kok / 1e6, 1), pmtiles_yhteensa_mt=round(pmt / 1e6, 1),
            raja_mt=150)
