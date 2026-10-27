@@ -40,8 +40,19 @@ jobs:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: a
         run: |
-          sudo -E apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
-            gdal-bin python3-gdal python3-numpy python3-scipy python3-pil python3-pyproj python3-shapely python3-pip fonts-dejavu-core tippecanoe
+          # Asennus kestää normaalisti alle minuutin, mutta peilipalvelin on kerran jättänyt sen roikkumaan koko askeleen aikarajan (8 min).
+          # Siksi jokaiselle yritykselle on oma 150 sekunnin raja ja yrityksiä on enintään kolme.
+          ok=0
+          for yritys in 1 2 3; do
+            if sudo -E timeout 150 apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
+                 gdal-bin python3-gdal python3-numpy python3-scipy python3-pil python3-pyproj python3-shapely python3-pip fonts-dejavu-core tippecanoe; then
+              ok=1
+              break
+            fi
+            echo "apt-asennus, yritys $yritys epäonnistui tai ylitti ajan"
+            sudo dpkg --configure -a || true
+          done
+          [ "$ok" = "1" ]
 
       - name: Asenna työkalut, pip-paketit
         timeout-minutes: 6
