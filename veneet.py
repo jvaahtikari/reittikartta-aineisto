@@ -90,6 +90,9 @@ PARAM = {
     "jako_min_px": 14,                   # jaon osan vähimmäiskoko siemenenä (px, 0,25 m2 per px)
     "ponttoni_sinisyys_min": 35.0,       # kapea (enintään ponttoni_leveys_max_m), selvästi sinertävä kohde (sinisen ja punaisen keskiarvon ero) on ponttoonilaiturin sormi, ei vene (veneet: alle 29)
     "ponttoni_leveys_max_m": 2.2,
+    "rantaroska_pituus_max_m": 5.0,      # alle tämän pituinen, heikon varmuuden kohde aivan rannassa hylätään (rantaroska)
+    "rantaroska_varmuus_max": 0.67,
+    "rantaroska_etaisyys_m": 2.5,
     "keula_vinouma_min": 0.04,           # painopisteen siirtymä pituudesta, jonka yli muoto ratkaisee keulan
     "laituri_vaikutus_m": 12.0,          # laituri vaikuttaa keulan suuntaan enintään tältä etäisyydeltä
 }
@@ -113,6 +116,8 @@ POISSULKUALUEET = [
      "syy": "leveä terassikansi aurinkovarjoineen ja pöytineen rakennuksen edessä (6 väärää havaintoa)"},
     {"satama": "Mustalahti", "nimi": "Rautatiesillan ristikko", "e0": 327350, "n0": 6823380, "e1": 327368, "n1": 6823392,
      "syy": "rautatiesillan ristikkorakenne, joka näyttää kapealta vaalealta kohteelta (1 väärä havainto)"},
+    {"satama": "Naistenlahti", "nimi": "Länsiniemekkeen kärjen kellukkeet", "e0": 328115, "n0": 6823825, "e1": 328135, "n1": 6823842,
+     "syy": "kaksi tasaisen vaaleanharmaata, suorakulmaista kohdetta (L-muotoinen ponttoni ja sen vieressä toinen) niemekkeen kärjessä, ei rungon rakennetta, kellukkeita (2 havaintoa)"},
 ]
 
 
@@ -688,8 +693,13 @@ def tunnista_satama(h, vrt, vesi_laaja, ranta_laaja, kuvat=True, kuvanimi=None):
     kasin_poistettu = ennen - len(kohteet)
     veneet = []
     samaa = {"muoto": 0, "laituri": 0, "oletus": 0, "laituri_samaa_muodon_kanssa": 0, "laituri_eri_muodon_kanssa": 0}
+    rantaroskaa = 0
     for k in kohteet:
         suunta, lahde, varmuus, ls = keula_ja_varmuus(k, laituriviivat, None)
+        if (k["pituus"] < PARAM["rantaroska_pituus_max_m"] and varmuus < PARAM["rantaroska_varmuus_max"]
+                and rajat.distance(Point(k["e"], k["n"])) < PARAM["rantaroska_etaisyys_m"]):
+            rantaroskaa += 1          # pieni heikko kohde aivan rannassa: rantakivi, laiturin juuri, hiekkaranta tai muuri
+            continue
         samaa[lahde] += 1
         if lahde == "muoto" and ls is not None:
             samaa["laituri_samaa_muodon_kanssa" if ls else "laituri_eri_muodon_kanssa"] += 1
@@ -697,7 +707,7 @@ def tunnista_satama(h, vrt, vesi_laaja, ranta_laaja, kuvat=True, kuvanimi=None):
                        "leveys": round(k["leveys"], 1), "luokka": luokka_ja_muoto(k["pituus"], k["leveys"]), "varmuus": varmuus,
                        "satama": h["nimi"], "suunta_lahde": lahde})
     yhteenveto = {"nimi": h["nimi"], "keskipiste_e": h["e"], "keskipiste_n": h["n"], "poijusade_m": h["r"], "paikannimi": h.get("paikannimi"),
-                  "veneita": len(veneet), "paallekkaisia_poistettu": poistettu, "ei_vetta_ymparilla_poistettu": ei_vetta, "tummia_rannalta_poistettu": tummia_poistettu, "ponttoneja_poistettu": ponttoneja_poistettu, "poissulkualueilta_poistettu": kasin_poistettu, "laitureita_alueella": len(laituriviivat), "tunnistusalue_m2": round(alue.area),
+                  "veneita": len(veneet), "paallekkaisia_poistettu": poistettu, "ei_vetta_ymparilla_poistettu": ei_vetta, "tummia_rannalta_poistettu": tummia_poistettu, "ponttoneja_poistettu": ponttoneja_poistettu, "poissulkualueilta_poistettu": kasin_poistettu, "rantaroskaa_poistettu": rantaroskaa, "laitureita_alueella": len(laituriviivat), "tunnistusalue_m2": round(alue.area),
                   "tunnistusalue_bbox": [round(v) for v in alue.bounds], "tilastot": tilastot, "keula": samaa,
                   "sekuntia": round(time.time() - alku, 1)}
     loki("%s: %d venettä (%s), %.0f s" % (h["nimi"], len(veneet), json.dumps({k: v["hyvaksytty"] for k, v in tilastot.items()}), time.time() - alku))
