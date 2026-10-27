@@ -41,7 +41,7 @@ jobs:
           NEEDRESTART_MODE: a
         run: |
           sudo -E apt-get -o Acquire::Retries=3 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 install -y --no-install-recommends \
-            gdal-bin python3-gdal python3-numpy python3-pil python3-pyproj python3-shapely python3-pip tippecanoe
+            gdal-bin python3-gdal python3-numpy python3-scipy python3-pil python3-pyproj python3-shapely python3-pip fonts-dejavu-core tippecanoe
 
       - name: Asenna työkalut, pip-paketit
         timeout-minutes: 6
@@ -71,10 +71,23 @@ jobs:
           MML_API_KEY: ${{ secrets.MML_API_KEY }}
         run: python3 laser.py 2>&1 | tee tyo/laser.log
 
-      # Paketin tarkistus uudelleen laserosan jälkeen, koska laser.py lisää aineisto.json-tiedostoon lähteen ja tiedostot
-      - name: Paketin tarkistus laserosan jälkeen (python3 tarkista.py)
+      # Vaihe 1d: veneiden paikat MML:n avoimesta ortokuvasta (Paituli). Ortokuvalehdet ovat 6 x 6 km:n JP2-tiedostoja (noin 100 Mt), joten ne
+      # välimuistitetaan kuten laz-tiedostot. Hylättyjen kevätkuvien muisti (hylatyt.json) on samassa hakemistossa.
+      - name: Ortokuvien välimuisti
+        uses: actions/cache@v4
+        with:
+          path: tyo/orto/jp2
+          key: orto-jp2-${{ hashFiles('veneet.py') }}
+          restore-keys: orto-jp2-
+
+      - name: Veneiden tunnistus ortokuvasta (python3 veneet.py)
         shell: bash
-        run: python3 tarkista.py 2>&1 | tee tyo/tarkista_laserin_jalkeen.log
+        run: python3 veneet.py 2>&1 | tee tyo/veneet.log
+
+      # Paketin tarkistus uudelleen laser- ja venevaiheen jälkeen, koska laser.py ja veneet.py lisäävät aineisto.json-tiedostoon lähteen ja tiedostot
+      - name: Paketin tarkistus laser- ja venevaiheen jälkeen (python3 tarkista.py)
+        shell: bash
+        run: python3 tarkista.py --vaadi-veneet 2>&1 | tee tyo/tarkista_laserin_jalkeen.log
 
       - name: Maaston korkeustarkistus (python3 maastotarkistus.py)
         if: always()
@@ -122,6 +135,7 @@ jobs:
             tyo/lataus_loki.json
             tyo/*.log
             tyo/laser/loki.json
+            tyo/veneet/loki.json
             tyo/laser/ruudut.json
             tyo/maastotarkistus.json
             tyo/puusto_tilasto.json

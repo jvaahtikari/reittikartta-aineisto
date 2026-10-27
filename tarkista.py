@@ -3,6 +3,7 @@
 
 Ajo:  python3 tarkista.py            tarkistaa ja kirjoittaa tulokset, palauttaa 1 jos jokin pakollinen tarkistus epäonnistuu
       python3 tarkista.py --kevyt    ohittaa korkeusmallitarkistuksen (ei tarvitse tyo/-hakemistoa)
+      python3 tarkista.py --vaadi-veneet   vaatii, että veneet.json on olemassa (vaihe 1d, ajetaan veneet.py:n jälkeen)
 
 Tarkistukset vastaavat määrittelyn hyväksymiskriteerejä 1-6 niiltä osin kuin ne voidaan mitata paketista:
  1  korkeudet tunnetuissa pisteissä (järven pinta, Pispalanharju, Näsinneulan juuri), mitataan korkeusmallista
@@ -14,6 +15,8 @@ Tarkistukset vastaavat määrittelyn hyväksymiskriteerejä 1-6 niiltä osin kui
  6  aineisto.json:n rakenne, tiedostokoot ja tarkistussummat
  7  hakuhakemistot osoitteet.json ja kiinteistot.json: testiosoitteet alle 50 m vaiheen 1 tuloksista, ei hajonnutta
     merkistöä, kiinteistötunnukset täsmäävät vektoritiilien tunnuspisteisiin
+ 9  veneet.json (vaihe 1d): olemassa, rakenne kunnossa, vähintään 100 venettä, koordinaatit paketin alueella. Pakollinen vain
+    lipulla --vaadi-veneet, koska ajaa.py kutsuu tätä ennen veneet.py:n ajoa.
 """
 import gzip
 import hashlib
@@ -432,8 +435,49 @@ def tarkista_korkeudet(mas):
     kirjaa("1_nasinneulan_juuri", ok, pisteet=nn, huomio="Koordinaatit ovat arvioita, riippumatonta mittaustulosta ei ollut käytettävissä. Hyväksyntäehto: 95-110 m, eli enintään noin 15 m järven pinnan yläpuolella")
 
 
+def tarkista_veneet(vaadi):
+    """Kriteeri 9 (vaihe 1d): veneet.json on olemassa ja siinä on vähintään 100 venettä oikeassa muodossa."""
+    p = ULOS / "veneet.json"
+    if not p.exists():
+        if vaadi:
+            kirjaa("9_veneet", False, virheita=["veneet.json puuttuu"])
+        else:
+            TULOKSET["huomiot"].append("veneet.json puuttuu (vaihe 1d ei ole vielä ajettu), tarkistus ohitettiin")
+        return
+    vir = []
+    d = json.load(open(p, encoding="utf-8"))
+    veneet = d.get("veneet") or []
+    if len(veneet) < 100:
+        vir.append("veneitä vain %d (vähintään 100)" % len(veneet))
+    for avain in ("lahde", "lisenssi", "lahdemerkinta", "ortokuvat", "koordinaatisto"):
+        if not d.get(avain):
+            vir.append("kenttä puuttuu: " + avain)
+    if d.get("koordinaatisto") != "EPSG:3067":
+        vir.append("koordinaatisto ei ole EPSG:3067")
+    if "Maanmittauslaitoksen ortokuva-aineistoa" not in (d.get("lahdemerkinta") or ""):
+        vir.append("lähdemerkintä ei vastaa määrittelyä")
+    for o in d.get("ortokuvat") or []:
+        if not (o.get("lehti") and isinstance(o.get("vuosi"), int) and "paiva" in o):
+            vir.append("ortokuvan tiedot puutteelliset: %s" % o)
+            break
+    luokat = {"soutu", "pieni", "keski", "purje"}
+    virheelliset = 0
+    for v in veneet:
+        ok = (all(isinstance(v.get(k), (int, float)) for k in ("e", "n", "suunta", "pituus", "leveys", "varmuus")) and v.get("luokka") in luokat
+              and isinstance(v.get("satama"), str) and 0 <= v["suunta"] < 360 and 0 < v["varmuus"] <= 1 and 2 <= v["pituus"] <= 20
+              and 1 <= v["leveys"] <= 7 and 300000 < v["e"] < 360000 and 6800000 < v["n"] < 6860000)
+        if not ok:
+            virheelliset += 1
+    if virheelliset:
+        vir.append("%d venettä, joiden kentät ovat puutteelliset tai arvot kohtuuttomia" % virheelliset)
+    satamittain = Counter(v.get("satama") for v in veneet)
+    kirjaa("9_veneet", not vir, virheita=vir, veneita=len(veneet), satamittain=dict(satamittain), raja=100,
+           ortokuvat=[(o.get("lehti"), o.get("vuosi")) for o in d.get("ortokuvat") or []])
+
+
 def main(argv):
     kevyt = "--kevyt" in argv
+    vaadi_veneet = "--vaadi-veneet" in argv
     a = tarkista_aineisto_json()
     tarkista_koot(a)
     vek = Tiilet(ULOS / "nasijarvi.pmtiles")
@@ -443,6 +487,7 @@ def main(argv):
     tarkista_hakemistot(vek)
     tarkista_valot(vek)
     tarkista_puhelinnakyma(vek, mas, pus)
+    tarkista_veneet(vaadi_veneet)
     if not kevyt and (TYO / "dem10.tif").exists():
         tarkista_korkeudet(mas)
     else:

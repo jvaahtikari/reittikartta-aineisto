@@ -126,6 +126,30 @@ def laserosa():
     return t
 
 
+def veneosa():
+    t = ["## 1b. Veneet ilmakuvasta (vaihe 1d)"]
+    loki = lue(TYO / "veneet" / "loki.json")
+    if not loki:
+        t.append("Veneiden tunnistus ei tuottanut lokia (ks. lokin loppu).")
+        return t
+    kuvat = loki.get("ortokuvat") or []
+    t.append("- Ortokuvat (Maanmittauslaitos, Paituli): %s." % " / ".join(
+        "%s %s (%s, vihreää %s)" % (o.get("lehti"), o.get("vuosi"), o.get("sarja"), luku(o.get("vihrea_osuus"), 3)) for o in kuvat))
+    hyl = [(o.get("lehti"), [(h.get("vuosi"), h.get("sarja")) for h in o.get("hylatyt_uudemmat", [])]) for o in kuvat if o.get("hylatyt_uudemmat")]
+    if hyl:
+        t.append("- Hylätyt uudemmat kuvat (lehdetön kevätkuva): %s." % " / ".join("%s: %s" % (l, ", ".join("%s %s" % x for x in hs)) for l, hs in hyl))
+    t.append("- Kuvauspäivää ei ole Paitulin indeksissä (päivä null). Tunnistuksen kesto %s s." % luku(loki.get("sekuntia"), 0))
+    t.append("")
+    rivit = []
+    for h in loki.get("satamat", []):
+        k = h.get("keula") or {}
+        rivit.append([h.get("nimi"), h.get("veneita"), ", ".join(str(v) for v in h.get("ortokuvavuodet", [])), h.get("laitureita_alueella"),
+                      luku((h.get("tunnistusalue_m2") or 0) / 1e4, 1), "%s / %s / %s" % (k.get("muoto"), k.get("laituri"), k.get("oletus")), h.get("sekuntia")])
+    rivit.append(["**yhteensä**", sum(h.get("veneita") or 0 for h in loki.get("satamat", [])), "", "", "", "", ""])
+    t += taulukko(["Satama", "Veneitä", "Ortokuvan vuosi", "Laituriviivoja", "Tunnistusalue ha", "Keula: muoto / laituri / oletus", "s"], rivit)
+    return t
+
+
 def tarkistuskohteet(tark):
     t = ["## 2. Tarkistuskohteet (vanha 2008 ja uusi korkeus)"]
     k = (tark or {}).get("8_tarkistuskohteet")
@@ -368,7 +392,7 @@ def koot():
 
 def lokit():
     t = ["## 9. Lokien loppu"]
-    for nimi in ("ajaa.log", "laser.log", "tarkista_laserin_jalkeen.log", "maastotarkistus.log"):
+    for nimi in ("ajaa.log", "laser.log", "veneet.log", "tarkista_laserin_jalkeen.log", "maastotarkistus.log"):
         r = lopun_rivit(TYO / nimi, 45 if nimi == "laser.log" else 20)
         if r:
             t.append("")
@@ -391,7 +415,7 @@ def main(argv):
              "- Kirjoitettu: %s UTC." % time.strftime("%Y-%m-%d %H:%M:%S", time.gmtime(nyt)),
              "- Kesto tähän asti: %s s." % (luku(nyt - alku, 0) if alku else "-"),
              "- Työnkulun tila ennen tätä askelta: %s." % os.environ.get("AJO_TILA", "-"), ""]
-    for osa in (laserosa, lambda: tarkistuskohteet(tark), maamerkit, lambda: aluevertailut(tark), lambda: rakennukset(tark), lambda: muut_tarkistukset(tark), maasto, puusto, ruovikko, tarkistus_py, koot, lokit):
+    for osa in (laserosa, veneosa, lambda: tarkistuskohteet(tark), maamerkit, lambda: aluevertailut(tark), lambda: rakennukset(tark), lambda: muut_tarkistukset(tark), maasto, puusto, ruovikko, tarkistus_py, koot, lokit):
         try:
             rivit += osa() + [""]
         except Exception as e:  # noqa: BLE001
