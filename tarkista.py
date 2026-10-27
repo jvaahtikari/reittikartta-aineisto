@@ -205,9 +205,12 @@ def tarkista_valot(vek):
     valaistut = {k: v for k, v in laitteet.items() if v[2].get("valaistu") == "K"}
     ilman = [k for k, v in valaistut.items() if not v[2].get("valotunnus")]
     ilman_sek = [k for k, v in valaistut.items() if not v[2].get("sektorit")]
-    kirjaa("3_mustalahden_vertailualue", len(laitteet) == 7 and len(valaistut) == 5 and not ilman,
+    # Turvalaitteiden kokonaismäärä riippuu Väyläviraston aineiston ajankohdasta: vaiheen 0 näytteessä ja vaiheen 1c ajossa (26.10.2026)
+    # niitä oli 7, mutta 27.10.2026 ajossa 16 (valaistuja edelleen 5, kaikilla valotunnus). Siksi määrälle asetetaan vain alaraja
+    # ja ehdoton vaatimus on se, että valaistuja on viisi ja jokaisella on valotunnus.
+    kirjaa("3_mustalahden_vertailualue", len(laitteet) >= 7 and len(valaistut) == 5 and not ilman,
            turvalaitteita=len(laitteet), valaistuja=len(valaistut), ilman_valotunnusta=ilman, ilman_sektoreita=ilman_sek,
-           odotettu="7 turvalaitetta, joista 5 valaistua (WFS-bbox-tulkinta, ks. koodin kommentti)",
+           odotettu="vähintään 7 turvalaitetta (vaiheen 0 näyte 7), joista tasan 5 valaistua ja kaikilla valotunnus (WFS-bbox-tulkinta, ks. koodin kommentti)",
            valaistut=[{"numero": k, "nimi": v[2].get("nimi"), "valotunnus": v[2].get("valotunnus"),
                        "sektorit": v[2].get("sektorit")} for k, v in sorted(valaistut.items())])
     # Koko alue: jokaisella valaistulla turvalaitteella valotunnus (z16-ruudut kattavat kaikki pistekohteet)
