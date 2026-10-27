@@ -1,15 +1,15 @@
 # Raportti, vaihe 1d: kiinnitettyjen veneiden paikat MML:n ortokuvasta
 
-Päiväys 27.10.2026. Tekijä: Sonnet-agentti. Tilaaja: Fable. Määrittely: `MAARITTELY_vaihe1d_veneet_ilmakuvasta.md`. Todentava ajo: GitHub Actions, ajo 40540934457 (main, commit 4515d0f). Ajo oli tämän raportin kirjoitushetkellä (27.10.2026 klo 18.42 Suomen aikaa) vielä kesken, joten lopputulosta ja kestoa ei ole tässä vahvistettu. Vaiheen 1c vastaava ajo kesti 27 min 20 s. Lopputulos ja kesto on luettava tiedostosta `ajoloki/viimeisin.md` tai ajon sivulta. Ajon yhteenveto on haarassa `ajoloki` tiedostossa `ajoloki/viimeisin.md`.
+Päiväys 27.10.2026. Tekijä: Sonnet-agentti. Tilaaja: Fable. Määrittely: `MAARITTELY_vaihe1d_veneet_ilmakuvasta.md`. Todentava ajo: GitHub Actions, ajo 40546475910 (main, commit e403bc3), kesto 29 min 47 s (17.00.40 - 17.30.27 UTC), onnistui, ja Pages-julkaisu onnistui. Kahta aiempaa ajoa ei voi käyttää todentavana (kohta 8). Ajon yhteenveto on haarassa `ajoloki` tiedostossa `ajoloki/viimeisin.md`.
 
 ## 1. Tulokset yhdellä silmäyksellä
 
 | Kriteeri | Tulos |
 | --- | --- |
-| 1. `veneet.json` paikallisesti ja Pagesissa | Täyttyy. Paikallinen tiedosto `/home/claude/opetus/navi/putki/ulos/veneet.json` on valmis (1 048 venettä, 225 kt) ja sama tiedosto syntyy Actionsissa. Pages-julkaisun onnistuminen ja ajon kesto ovat vahvistamatta, koska ajo oli kesken (ks. ylempänä). |
+| 1. `veneet.json` paikallisesti ja Pagesissa | Täyttyy. Paikallinen tiedosto `/home/claude/opetus/navi/putki/ulos/veneet.json` on valmis (1 048 venettä, 225 kt) ja sama tiedosto syntyy Actionsissa. Ajo 40546475910 onnistui, ja työnkulun `julkaise`-työ (`actions/deploy-pages@v4`) onnistui. Pages-sivun sisältöä ei voi lukea tästä työtilasta, joten julkaisun onnistuminen perustuu työnkulun tilaan. Ajolokin mukaan `veneet.json` (0,22 Mt) kuului julkaistavaan pakettiin. |
 | 2. Tarkistuskuvat ja tarkkuus luvuin | Täyttyy. Kuvat `shots/veneet_<satama>.png` kaikista kahdeksasta satamasta. Naistenlahden otoksessa (281 havaintoa) noin 93 % näkyvistä veneistä tunnistettiin ja noin 1,4 % havainnoista oli vääriä. Mustalahden otoksessa (41 havaintoa) noin 87 % ja noin 2 %. Alaraja 80 % ja yläraja 10 % täyttyvät. Ks. kohta 6 |
 | 3. Länsiaallonmurtajan niemekkeen vieressä ei venettä ilman kuvassa näkyvää venettä | Täyttyy. Niemekkeen sisällä 0 venettä ja alle 5 m:n päässä sen reunasta 0 venettä. Viereisellä laiturilla ovat kuvassa näkyvät veneet. Ks. kohta 7 |
-| 4. Muut tiedostot ennallaan, `tarkista.py` läpi, koko alle 150 Mt | Täyttyy. `veneet.py` lisää vain tiedoston `veneet.json` ja täydentää `aineisto.json`-tiedostoa. `tarkista.py --vaadi-veneet` meni läpi koepaketissa (kaikki tarkistukset OK, paketti 129,3 Mt). Työnkulun oma `tarkista.py --vaadi-veneet` -askel ei ollut vielä ehtinyt ajoon. |
+| 4. Muut tiedostot ennallaan, `tarkista.py` läpi, koko alle 150 Mt | Täyttyy. `veneet.py` lisää vain tiedoston `veneet.json` ja täydentää `aineisto.json`-tiedostoa. `tarkista.py --vaadi-veneet` meni läpi koepaketissa (kaikki tarkistukset OK, paketti 129,3 Mt). Työnkulun oma `tarkista.py --vaadi-veneet` onnistui ajossa 40546475910 (kaikki 13 tarkistusta OK, `9_veneet`: 1 048 venettä ja ortokuvat 2023, paketin koko 134,1 Mt, raja 150 Mt, ks. ajolokin kohta 7). |
 | 5. Raportti | Tämä tiedosto |
 
 ## 2. Lähde ja vuodet
@@ -135,6 +135,9 @@ Ensimmäisessä täydessä ajossa niemekkeen kärjessä oli kaksi havaintoa (kes
 - `tarkista.py`: uusi tarkistus `9_veneet` (tiedosto on olemassa, vähintään 100 venettä, kenttien tyypit ja arvoalueet, ortokuvat ja satamakohtaiset määrät). Ilman lippua `--vaadi-veneet` puuttuva tiedosto vain mainitaan, koska `ajaa.py` kutsuu `tarkista.py`:tä ennen `veneet.py`:tä.
 - `ajoloki.py`: uusi osa "1b. Veneet ilmakuvasta (vaihe 1d)" tiedostoon `ajoloki/viimeisin.md` (ortokuvat, hylätyt kuvat, veneet satamittain, keulan lähteet) ja `veneet.log` lokin loppuun.
 - Paikallinen koepaketti: `tarkista.py --vaadi-veneet` meni läpi (kaikki tarkistukset OK, paketin koko 129,3 Mt, raja 150 Mt, `veneet.json` 0,2 Mt).
+- Todentava ajo 40546475910: kesto 29 min 47 s, josta `ajaa.py` 19 min 39 s, `veneet.py` 2 min 17 s (ortokuvien välimuisti oli tyhjä, joten kuvat haettiin ajon aikana, noin 13 - 15 s lehteä kohti) ja `tarkista.py` laser- ja venevaiheen jälkeen 1 min 39 s. Veneitä tunnistettiin 1 048 kuten paikallisessa ajossa, satamakohtaiset määrät ja keulan lähteet ovat samat kuin kohdan 5 taulukossa. `ajoloki/viimeisin.md` vahvistaa tämän.
+- Ajon 40546475910 paketin koko 134,1 Mt (pmtiles 113,6 Mt), kun raja on 150 Mt. Ajolokin hakemistoyhteenveto näyttää 187,1 Mt, koska siihen lasketaan mukaan Pagesiin menemättömät tarkistuskuvat (poistetaan ennen julkaisua).
+- Aiemmat ajot eivät ole todentavia. Ajo 40540934457 (commit 4515d0f) kaatui vaiheessa `ajaa.py`, koska vaiheen 0 tarkistus `3_mustalahden_vertailualue` odotti tasan 7 turvalaitetta ja Väyläviraston aineisto antoi nyt 16 (valaistuja edelleen 5, kaikilla valotunnus). Syy oli lähdeaineiston muutos eikä vaiheen 1d koodi, ja `veneet.py` ei ehtinyt ajoon. Tarkistukselle asetettiin alaraja 7 (commit 2a6f376). Ajo 40544729427 (commit 2a6f376) kaatui apt-asennuksen aikarajaan 8 minuutissa, joka oli ajoympäristön häiriö, ja asennus tehdään nyt enintään kolmella 150 sekunnin yrityksellä (commit e403bc3).
 
 ## 9. Rajoitukset
 
